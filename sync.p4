@@ -52,6 +52,7 @@ header ts64_h {
 }
 
 struct header_t {
+    pktgen_timer_header_t pktgen;
     ptp_metadata_t ts_ctrl;
     ethernet_h ethernet;
     sync_ctrl_h sync_ctrl;
@@ -88,6 +89,14 @@ parser SwitchIngressParser(
     state start {
         pkt.extract(ig_intr_md);
         pkt.advance(PORT_METADATA_SIZE);
+        transition select(ig_intr_md.ingress_port) {
+            68      : parse_pktgen;
+            default : parse_ethernet;
+        }
+    }
+
+    state parse_pktgen {
+        pkt.extract(hdr.pktgen);
         transition parse_ethernet;
     }
 
@@ -132,6 +141,14 @@ control SwitchIngress(
         ig_tm_md.ucast_egress_port = hdr.sync_ctrl.port; // Send to Peer
     }
 
+    action drop_packet() {
+        ig_dprsr_md.drop_ctl = 0x1; // Drop packet.
+    }
+
+    action set_egress(PortId_t port) {
+        ig_tm_md.ucast_egress_port = port;
+    }
+
     table process_ts_pkt {
         key = {
             hdr.ethernet.ether_type : exact;
@@ -151,8 +168,23 @@ control SwitchIngress(
         }
     }
 
+    table l1_forwarding {
+        key = {
+            ig_intr_md.ingress_port : exact;
+        }
+        actions = {
+            set_egress;
+            drop_packet;
+        }
+        const entries = {
+            68 : set_egress(60); // Pktgen -> 24/0
+        }
+        default_action = drop_packet;
+    }
+
     apply {
         if (hdr.sync_ctrl.isValid()) process_ts_pkt.apply();
+        else l1_forwarding.apply();
     }
 }
 
