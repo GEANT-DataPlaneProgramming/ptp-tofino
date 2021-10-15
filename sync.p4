@@ -62,24 +62,6 @@ struct header_t {
     ts48_h s1_i;
 }
 
-/*
-header ptp_metadata_t {
-    bit<8> udp_cksum_byte_offset;       // Byte offset at which the egress MAC
-                                        // needs to update the UDP checksum
-
-
-    bit<8> cf_byte_offset;              // Byte offset at which the egress MAC
-                                        // needs to re-insert
-                                        // ptp_sync.correction field
-
-    bit<48> updated_cf;                 // Updated correction field in ptp sync
-                                        // message
-}
-*/
-
-// ---------------------------------------------------------------------------
-// Ingress parser
-// ---------------------------------------------------------------------------
 parser SwitchIngressParser(
         packet_in pkt,
         out header_t hdr,
@@ -178,13 +160,23 @@ control SwitchIngress(
         }
         const entries = {
             68 : set_egress(60); // Pktgen -> 24/0
+            60 : set_egress(60); // 24/0 -> 20/0
+            28 : set_egress(28); // 20/0 -> 24/0
         }
         default_action = drop_packet;
     }
 
     apply {
         if (hdr.sync_ctrl.isValid()) process_ts_pkt.apply();
-        else l1_forwarding.apply();
+        else {
+            l1_forwarding.apply();
+            hdr.pktgen.setInvalid();
+        }
+        // if (hdr.pktgen.isValid()) {
+        //     if (hdr.ttl > ig_intr_md.ingress_mac_tstamp)  l1_forwarding.apply();
+        //     else drop_packet();
+        //     hdr.pktgen.setInvalid();
+        // }
     }
 }
 

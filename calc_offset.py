@@ -42,7 +42,44 @@ def parse_pkt(pkt, pkt_bytes):
 
     if pkt['state'] == 2: calc_offset(pkt)
 
+def get_ts7(port):
+    ts7 = 0
+    for i in range(5):
+        o = c.ts_1588_timestamp_tx_get(0,port)
+        if o.ts_valid: ts7 = o.ts
+        else: break
+    return ts7
+
 def calc_offset(pkt):
+    LOCAL_PORT=0x3c
+    REMOTE_PORT=0x1c
+    local_ts1 = pkt['local_ingress_ts']
+    remote_ts1 = pkt['remote_ingress_ts']
+    local_ts6 = pkt['local_egress_ts']
+    remote_ts6 = pkt['remote_egress_ts']
+    #local_ts7 = c.ts_1588_timestamp_tx_get(0,LOCAL_PORT).ts
+    #remote_ts7 = c.ts_1588_timestamp_tx_get(0,REMOTE_PORT).ts
+    local_ts7 = get_ts7(LOCAL_PORT)
+    remote_ts7 = get_ts7(REMOTE_PORT)
+    local_ets_delta = local_ts7 - local_ts6
+    remote_ets_delta = remote_ts7 - remote_ts6
+
+    ts6_d1 = remote_ts1 - local_ts6
+    ts6_d2 = local_ts1 - remote_ts6
+    ts7_d1 = remote_ts1 - local_ts7
+    ts7_d2 = local_ts1 - remote_ts7
+
+    ts6_owd = (local_ts1 - local_ts6 - remote_ts6 + remote_ts1)/2
+    ts7_owd = (local_ts1 - local_ts7 - remote_ts7 + remote_ts1)/2
+    ts6_offset = (local_ts6 - remote_ts1 - remote_ts6 + local_ts1)/2
+    ts7_offset = (local_ts7 - remote_ts1 - remote_ts7 + local_ts1)/2
+
+    print("%d, %d, %d, %d, %d, %d, " % (local_ts6, local_ts7, remote_ts1, remote_ts6, remote_ts7, local_ts1), end='')
+    print("%0.1f, %0.1f, %0.1f, %0.1f, " % (ts6_offset, ts6_owd, ts6_d1, ts6_d2), end='')
+    print("%0.1f, %0.1f, %0.1f, %0.1f, " % (ts7_offset, ts7_owd, ts7_d1, ts7_d2), end='')
+    print("%d, %d" % (local_ets_delta, remote_ets_delta))
+
+def calc_ts6_offset(pkt):
     time_in_switch = pkt['remote_egress_ts'] - pkt['remote_ingress_ts']
     round_trip_time = pkt['local_ingress_ts'] - pkt['local_egress_ts']
     time_on_wire = round_trip_time - time_in_switch
@@ -91,4 +128,4 @@ def calc_ts7_offset(pkt):
 
 c = thrift_connect()
 
-sniff(iface=INTERFACE, count=1000, prn=lambda x: parse_ethernet(x.build()))
+sniff(iface=INTERFACE, count=1100, prn=lambda x: parse_ethernet(x.build()))
