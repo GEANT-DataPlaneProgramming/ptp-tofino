@@ -188,6 +188,8 @@ class PortDS:
         self.delayMechanism = PTP_PROFILE['portDS.delayMechanism']
         self.logMinPdelayReqInterval = PTP_PROFILE['portDS.logMinPdelayReqInterval']
         self.versionNumber = 2
+        # Implementation Specific
+        self.foreignMasterDS = set()
 
 ## Transparent Clock Data Sets
 
@@ -201,7 +203,7 @@ class TransparentClockDefaultDS:
         self.primaryDomain = 0
 
 class TransparentClockPortDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, portNumer):
+    def __init__(self, PTP_PROFILE, clockIdentity, portNumber):
         # Satic Members
         self.portIdentity = PortIdentity()
         self.portIdentity.clockIdentity = clockIdentity
@@ -218,3 +220,23 @@ class ForeignMasterDS:
         self.foreignMasterPortIdentity.clockIdentity = clockIdentity
         self.foreignMasterPortIdentity.portNumber = portNumber
         self.foreignMasterAnnounceMessages = 0
+
+## Custom Classes ##
+
+class OrdinaryClock:
+    def __init__(self, PTP_PROFILE, macAddress, numberPorts):
+        clockIdentity = macAddress # FIX: convert MAC to clockIdentity
+        self.defaultDS = DefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
+        self.currentDS = CurrentDS()
+        self.parentDS = ParentDS(self.defaultDS)
+        self.timePropertiesDS = TimePropertiesDS()
+        self.portDS = { PortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
+
+class TransparentClock:
+    def __init__(self, PTP_PROFILE, macAddress, numberPorts):
+        clockIdentity = macAddress # FIX: convert MAC to clockIdentity
+        self.transparentClockDefaultDS = TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
+        self.transparentClockPortDS = { TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
+
+c = OrdinaryClock(PTP_PROFILE_E2E, -1, 32)
+tc = TransparentClock(PTP_PROFILE_E2E, -1, 32)
