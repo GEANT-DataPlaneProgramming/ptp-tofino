@@ -3,6 +3,7 @@
 # TODO: What time scale should be used?
 
 from enum import IntEnum
+import struct
 #from threading import Timer
 
 class PTP_TIME_SRC(IntEnum):
@@ -100,9 +101,9 @@ class PortAddress:
 
 class ClockQuality:
     def __init__(self):
-        self.clockClass = None
-        self.clockAccuracy = None
-        self.offsetScaledLogVariance = None
+        self.clockClass = None # UInt8
+        self.clockAccuracy = None # Enum8
+        self.offsetScaledLogVariance = None #UInt16
 
 class TLV:
     def __init__(self):
@@ -114,6 +115,243 @@ class PTPText:
     def __init__(self):
         self.lengthField = None
         self.textField = None
+
+### PTP Messages
+
+class Header:
+    parser = struct.Struct('!2BHBx2sq4x8sHHBb')
+
+    def __init__(self):
+        self.transportSpecific = None # Nibble
+        self.messageType = None # Enumneration4
+        self.versionPTP = None # UInt4
+        self.messageLength = None # Uint16
+        self.domainNumber = None # UInt8
+        self.flagField = None # Octet[2]
+        self.correctionField = None # Int64
+        self.sourcePortIdentity = PortIdentity()
+        # self.sourcePortIdentity.clockIdentity = None # Octet[8]
+        # self.sourcePortIdentity.portNumber = None # UInt16
+        self.sequenceId = None # UInt16
+        self.controlField = None # UInt8
+        self.logMessageInterval = None # Int8
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.transportSpecific = t[0] >> 4
+        self.messageType = t[0] & 0x0F
+        self.versionPTP = t[1] & 0x0F
+        self.messageLength = t[2]
+        self.domainNumber = t[3]
+        self.flagField = t[4]
+        self.correctionField = t[5]
+        self.sourcePortIdentity.clockIdentity = t[6]
+        self.sourcePortIdentity.portNumber = t[7]
+        self.sequenceId = t[8]
+        self.controlField = t[9]
+        self.logMessageInterval = t[10]
+
+    def bytes(self):
+        t = ((self.transportSpecific << 4) | self.messageType, self.versionPTP, \
+        self.messageLength, self.domainNumber, self.flagField, \
+        self.correctionField, self.sourcePortIdentity.clockIdentity, \
+        self.sourcePortIdentity.portNumber, self.sequenceId, \
+        self.controlField, self.logMessageInterval)
+        return self.parser.pack(*t)
+
+class Announce:
+    parser = struct.Struct('!6sLhx3BHB8sHB')
+
+    def __init__(self):
+        self.originTimestamp = TimeStamp()
+        # self.originTimestamp.secondsField = None # UInt48
+        # self.originTimestamp.nanosecondsField = None # UInt32
+        self.currentUtcOffset = None # Int16
+        self.grandmasterPriority1 = None # UInt8
+        self.grandmasterClockQuality = ClockQuality()
+        # self.grandmasterClockQuality.clockClass = None # UInt8
+        # self.grandmasterClockQuality.clockAccuracy = None # Enum8
+        # self.grandmasterClockQuality.offsetScaledLogVariance = None # UInt16
+        self.grandmasterPriority2 = None # UInt8
+        self.grandmasterIdentity = None # Octet[8]
+        self.stepsRemoved = None # UInt16
+        self.timeSource = None # Enum8
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.originTimestamp.nanosecondsField = t[1]
+        self.currentUtcOffset = t[2]
+        self.grandmasterPriority1 = t[3]
+        self.grandmasterClockQuality.clockClass = t[4]
+        self.grandmasterClockQuality.clockAccuracy = t[5]
+        self.grandmasterClockQuality.offsetScaledLogVariance = t[6]
+        self.grandmasterPriority2 = t[7]
+        self.grandmasterIdentity = t[8]
+        self.stepsRemoved = t[9]
+        self.timeSource = t[10]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
+        self.originTimestamp.nanosecondsField, \
+        self.currentUtcOffset, \
+        self.grandmasterPriority1, \
+        self.grandmasterClockQuality.clockClass, \
+        self.grandmasterClockQuality.clockAccuracy, \
+        self.grandmasterClockQuality.offsetScaledLogVariance, \
+        self.grandmasterPriority2, \
+        self.grandmasterIdentity, \
+        self.stepsRemoved, \
+        self.timeSource \
+        )
+        return self.parser.pack(*t)
+
+class Sync:
+    parser = struct.Struct('!6sL')
+
+    def __init__(self):
+        self.originTimestamp = TimeStamp()
+        # self.originTimestamp.secondsField = None # UInt48
+        # self.originTimestamp.nanosecondsField = None # UInt32
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.originTimestamp.nanosecondsField = t[1]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
+        self.originTimestamp.nanosecondsField \
+        )
+        return self.parser.pack(*t)
+
+Delay_Req = Sync
+
+class Follow_Up:
+    parser = struct.Struct('!6sL')
+
+    def __init__(self):
+        self.preciseOriginTimestamp = TimeStamp()
+        # self.preciseOriginTimestamp.secondsField = None # UInt48
+        # self.preciseOriginTimestamp.nanosecondsField = None # UInt32
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.preciseOriginTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.preciseOriginTimestamp.nanosecondsField = t[1]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.preciseOriginTimestamp.secondsField)[2:8], \
+        self.preciseOriginTimestamp.nanosecondsField \
+        )
+        return self.parser.pack(*t)
+
+class Delay_Resp:
+    parser = struct.Struct('!6sL8sH')
+
+    def __init__(self):
+        self.receiveTimestamp = TimeStamp()
+        # self.receiveTimestamp.secondsField = None # UInt48
+        # self.receiveTimestamp.nanosecondsField = None # UInt32
+        self.requestingPortIdentity = PortIdentity()
+        # self.requestingPortIdentity.clockIdentity = None # Octet[8]
+        # self.requestingPortIdentity.portNumber = None # UInt16
+
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.receiveTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.receiveTimestamp.nanosecondsField = t[1]
+        self.requestingPortIdentity.clockIdentity = t[2]
+        self.requestingPortIdentity.portNumber = t[3]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.receiveTimestamp.secondsField)[2:8], \
+        self.receiveTimestamp.nanosecondsField, \
+        self.requestingPortIdentity.clockIdentity, \
+        self.requestingPortIdentity.portNumber \
+        )
+        return self.parser.pack(*t)
+
+class Pdelay_Req:
+    parser = struct.Struct('!6sL10x')
+
+    def __init__(self):
+        self.originTimestamp = TimeStamp()
+        # self.originTimestamp.secondsField = None # UInt48
+        # self.originTimestamp.nanosecondsField = None # UInt32
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.originTimestamp.nanosecondsField = t[1]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
+        self.originTimestamp.nanosecondsField \
+        )
+        return self.parser.pack(*t)
+
+class Pdelay_Resp:
+    parser = struct.Struct('!6sL8sH')
+
+    def __init__(self):
+        self.requestReceiptTimestamp = TimeStamp()
+        # self.receiveTimestamp.secondsField = None # UInt48
+        # self.receiveTimestamp.nanosecondsField = None # UInt32
+        self.requestingPortIdentity = PortIdentity()
+        # self.requestingPortIdentity.clockIdentity = None # Octet[8]
+        # self.requestingPortIdentity.portNumber = None # UInt16
+
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.requestReceiptTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.requestReceiptTimestamp.nanosecondsField = t[1]
+        self.requestingPortIdentity.clockIdentity = t[2]
+        self.requestingPortIdentity.portNumber = t[3]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.requestReceiptTimestamp.secondsField)[2:8], \
+        self.requestReceiptTimestamp.nanosecondsField, \
+        self.requestingPortIdentity.clockIdentity, \
+        self.requestingPortIdentity.portNumber \
+        )
+        return self.parser.pack(*t)
+
+class Pdelay_Resp_Follow_Up:
+    parser = struct.Struct('!6sL8sH')
+
+    def __init__(self):
+        self.responseOriginTimestamp = TimeStamp()
+        # self.receiveTimestamp.secondsField = None # UInt48
+        # self.receiveTimestamp.nanosecondsField = None # UInt32
+        self.requestingPortIdentity = PortIdentity()
+        # self.requestingPortIdentity.clockIdentity = None # Octet[8]
+        # self.requestingPortIdentity.portNumber = None # UInt16
+
+
+    def parse(self, buffer):
+        t = self.parser.unpack(buffer)
+        self.responseOriginTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
+        self.responseOriginTimestamp.nanosecondsField = t[1]
+        self.requestingPortIdentity.clockIdentity = t[2]
+        self.requestingPortIdentity.portNumber = t[3]
+
+    def bytes(self):
+        t = (
+        struct.pack('!Q', self.responseOriginTimestamp.secondsField)[2:8], \
+        self.responseOriginTimestamp.nanosecondsField, \
+        self.requestingPortIdentity.clockIdentity, \
+        self.requestingPortIdentity.portNumber \
+        )
+        return self.parser.pack(*t)
 
 ### Ordinary and Boundary Clock Data Sets
 ## Clock Data Sets

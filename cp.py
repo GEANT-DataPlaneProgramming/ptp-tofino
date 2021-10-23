@@ -22,5 +22,21 @@ class TransparentClock:
         self.transparentClockDefaultDS = ptp.TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
         self.transparentClockPortDS = { ptp.TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
 
-c = OrdinaryClock(ptp.PTP_PROFILE_E2E, -1, 32)
-tc = TransparentClock(ptp.PTP_PROFILE_E2E, -1, 32)
+### Testing ###
+
+# c = OrdinaryClock(ptp.PTP_PROFILE_E2E, -1, 32)
+# tc = TransparentClock(ptp.PTP_PROFILE_E2E, -1, 32)
+
+h1 = ptp.Header()
+h1.transportSpecific = 0 # Nibble
+h1.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE # Enumneration4
+h1.versionPTP = 2 # UInt4
+h1.messageLength = 34 # Uint16
+h1.domainNumber = 0 # UInt8
+h1.flagField = b'\x00\x00' # Octet[2]
+h1.correctionField = 0 # Int64
+h1.sourcePortIdentity.clockIdentity = b'ABCDEFGH' # Octet[8]
+h1.sourcePortIdentity.portNumber = 1 # UInt16
+h1.sequenceId = 42 # UInt16
+h1.controlField = 0x05 # UInt8
+h1.logMessageInterval = 1 # Int8
