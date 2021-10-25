@@ -127,7 +127,36 @@ class OrdinaryClock:
 
     def sendAnnounce(self, portNumber):
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
+        p = self.portDS[portNumber]
+        hdr = ptp.Header()
         msg = ptp.Announce()
+
+        hdr.transportSpecific = None # FIX: = self.hwConst.transportSpecific
+        hdr.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
+        hdr.versionPTP = p.versionNumber
+        hdr.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
+        hdr.domainNumber = self.defaultDS.domainNumber
+        hdr.flagField = None # Octet[2] FIX: flags
+        hdr.correctionField = 0 # MsgType dependant
+        hdr.sourcePortIdentity.clockIdentity = p.portIdentity.clockIdentity
+        hdr.sourcePortIdentity.portNumber = p.portIdentity.portNumber
+        hdr.sequenceId = None # UInt16 FIX: track sequenceIds
+        hdr.controlField = 0x05 # MsgType dependant
+        hdr.logMessageInterval = p.logAnnounceInterval # MsgType dependant
+
+        msg.originTimestamp.secondsField = 0 # UInt48
+        msg.originTimestamp.nanosecondsField = 0 # UInt32
+        msg.currentUtcOffset = self.timePropertiesDS.currentUtcOffset # Int16
+        msg.grandmasterPriority1 = self.parentDS.grandmasterPriority1 # UInt8
+        msg.grandmasterClockQuality.clockClass = self.parentDS.grandmasterClockQuality.clockClass # UInt8
+        msg.grandmasterClockQuality.clockAccuracy = self.parentDS.grandmasterClockQuality.clockAccuracy # Enum8
+        msg.grandmasterClockQuality.offsetScaledLogVariance = self.parentDS.grandmasterClockQuality.offsetScaledLogVariance # UInt16
+        msg.grandmasterPriority2 = self.parentDS.grandmasterPriority1 # UInt8
+        msg.grandmasterIdentity = self.parentDS.grandmasterIdentity # Octet[8]
+        msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
+        msg.timeSource = self.timePropertiesDS.timeSource # Enum8
+
+        #self.sendMessage(hdr.bytes() + msg.bytes(), portNumber, DST_MULTICAST)
 
     def sendSync(self, portNumber):
         print("[SEND] SYNC (Port %d)" % (portNumber))
