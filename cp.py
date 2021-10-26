@@ -47,7 +47,7 @@ class OrdinaryClock:
         print("[STATE] LISTENING (All Ports)")
         for p in self.portDS.values():
             p.portState = ptp.PTP_STATE.LISTENING
-            announceInterval = 2 ^ p.logAnnounceInterval
+            announceInterval = 2 ** p.logAnnounceInterval
             announceReceiptTimeoutInterval = p.announceReceiptTimeout * announceInterval
             interval = announceReceiptTimeoutInterval + (announceInterval * random.random())
             p.announceReceiptTimeoutTimer = Timer(interval, self.announceReceiptTimeoutEvent, [p.portIdentity.portNumber])
@@ -58,10 +58,10 @@ class OrdinaryClock:
         p = self.portDS[portNumber]
         p.announceReceiptTimeoutTimer.stop()
         p.portState = ptp.PTP_STATE.MASTER
-        announceInterval = 2 ^ p.logAnnounceInterval
+        announceInterval = 2 ** p.logAnnounceInterval
         p.announeTimer = Timer(announceInterval, self.sendAnnounce, [portNumber])
         p.announeTimer.start()
-        syncInterval = 2 ^ p.logSyncInterval
+        syncInterval = 2 ** p.logSyncInterval
         p.syncTimer = Timer(syncInterval, self.sendSync, [portNumber])
         p.syncTimer.start()
 
