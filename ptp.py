@@ -118,6 +118,50 @@ class PTPText:
 
 ### PTP Messages
 
+class FlagField:
+    def __init__(self):
+        self.alternateMasterFlag = False
+        self.twoStepFlag = False
+        self.unicastFlag = False
+        self.profile1 = False
+        self.profile2 = False
+        self.leap61 = False
+        self.leap59 = False
+        self.currentUtcOffsetValid = False
+        self.ptpTimescale = False
+        self.timeTraceable = False
+        self.frequencyTraceable = False
+
+    def parse(self, buffer):
+        flagField = [[(buffer[i] >> j) & 0x01 for j in range(8)] for i in range(len(buffer))]
+        self.alternateMasterFlag = buffer[0][0]
+        self.twoStepFlag = buffer[0][1]
+        self.unicastFlag = buffer[0][2]
+        self.profile1 = buffer[0][5]
+        self.profile2 = buffer[0][6]
+        self.leap61 = buffer[1][0]
+        self.leap59 = buffer[1][1]
+        self.currentUtcOffsetValid = buffer[1][2]
+        self.ptpTimescale = buffer[1][3]
+        self.timeTraceable = buffer[1][4]
+        self.frequencyTraceable = buffer[1][5]
+
+    def bytes(self):
+        buffer = [[False]*8,[False]*8]
+        buffer[0][0] = self.alternateMasterFlag
+        buffer[0][1] = self.twoStepFlag
+        buffer[0][2] = self.unicastFlag
+        buffer[0][5] = self.profile1
+        buffer[0][6] = self.profile2
+        buffer[1][0] = self.leap61
+        buffer[1][1] = self.leap59
+        buffer[1][2] = self.currentUtcOffsetValid
+        buffer[1][3] = self.ptpTimescale
+        buffer[1][4] = self.timeTraceable
+        buffer[1][5] = self.frequencyTraceable
+        l = [sum([(2**j) * buffer[i][j] for j in range(8) ]) for i in range(len(buffer))]
+        return struct.pack('2B', *l)
+
 class Header:
     parser = struct.Struct('!2BHBx2sq4x8sHHBb')
 
@@ -127,7 +171,7 @@ class Header:
         self.versionPTP = None # UInt4
         self.messageLength = None # Uint16
         self.domainNumber = None # UInt8
-        self.flagField = None # Octet[2]
+        self.flagField = FlagField() # Octet[2]
         self.correctionField = None # Int64
         self.sourcePortIdentity = PortIdentity()
         # self.sourcePortIdentity.clockIdentity = None # Octet[8]
@@ -143,7 +187,7 @@ class Header:
         self.versionPTP = t[1] & 0x0F
         self.messageLength = t[2]
         self.domainNumber = t[3]
-        self.flagField = t[4]
+        self.flagField.parse(t[4])
         self.correctionField = t[5]
         self.sourcePortIdentity.clockIdentity = t[6]
         self.sourcePortIdentity.portNumber = t[7]
@@ -152,11 +196,20 @@ class Header:
         self.logMessageInterval = t[10]
 
     def bytes(self):
-        t = ((self.transportSpecific << 4) | self.messageType, self.versionPTP, \
-        self.messageLength, self.domainNumber, self.flagField, \
-        self.correctionField, self.sourcePortIdentity.clockIdentity, \
-        self.sourcePortIdentity.portNumber, self.sequenceId, \
-        self.controlField, self.logMessageInterval)
+        flagField = sum([(2**i) * self.flagField[i] for i in range(len(self.flagField))])
+        t = (
+        (self.transportSpecific << 4) | self.messageType, \
+        self.versionPTP, \
+        self.messageLength, \
+        self.domainNumber,
+        self.flagField.bytes(), \
+        self.correctionField, \
+        self.sourcePortIdentity.clockIdentity, \
+        self.sourcePortIdentity.portNumber, \
+        self.sequenceId, \
+        self.controlField, \
+        self.logMessageInterval \
+        )
         return self.parser.pack(*t)
 
 class Announce:
