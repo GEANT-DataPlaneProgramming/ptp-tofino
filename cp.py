@@ -1,11 +1,21 @@
 #!/bin/python3
 
-# TODO: What time scale should be used?
-
 import ptp, threading, random
-#from threading import Timer
 
 ## Custom Classes ##
+
+# Impements Section 7.3.7
+class SequenceTracker:
+    def __init__(self):
+        self.sequenceId = {}
+
+    def getSequenceId(self, portNumber, messageType, destination):
+        key = (portNumber, messageType,destination)
+        if key not in self.sequenceId:
+            self.sequenceId[key] = 0
+        sequenceId = self.sequenceId[key]
+        self.sequenceId[key] = (sequenceId + 1) & 0xFFFF
+        return sequenceId
 
 class Timer:
     def __init__(self, interval, function, args):
@@ -29,10 +39,9 @@ class Timer:
         self.start()
 
 class OrdinaryClock:
-    def __init__(self, PTP_PROFILE, macAddress, numberPorts):
+    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
         print("[EVENT] POWERUP (All Ports)")
         print("[STATE] INITIALIZING (All Ports)")
-        clockIdentity = macAddress # FIX: convert MAC to clockIdentity
         self.defaultDS = ptp.DefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
         self.currentDS = ptp.CurrentDS()
         self.parentDS = ptp.ParentDS(self.defaultDS)
@@ -40,6 +49,8 @@ class OrdinaryClock:
         self.portDS = {}
         for i in range(numberPorts):
             self.portDS[i+1] = ptp.PortDS(PTP_PROFILE, clockIdentity, i + 1)
+            self.portDS[i+1].transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
+        self.sequenceTracker = SequenceTracker()
         # Open Network Socket
         self.listeningTransition()
 
@@ -125,24 +136,36 @@ class OrdinaryClock:
     def masterSelectedEvent(self, port):
         pass
 
-    def sendAnnounce(self, portNumber):
+    def sendAnnounce(self, portNumber, destinationAddress = b''):
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
         p = self.portDS[portNumber]
         hdr = ptp.Header()
         msg = ptp.Announce()
 
-        hdr.transportSpecific = None # FIX: = self.hwConst.transportSpecific
+        hdr.transportSpecific = ptp.CONST[p.transport]['transportSpecific']
         hdr.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
         hdr.versionPTP = p.versionNumber
         hdr.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
         hdr.domainNumber = self.defaultDS.domainNumber
-        hdr.flagField = None # Octet[2] FIX: flags
-        hdr.correctionField = 0 # MsgType dependant
+        if p.portState == ptp.PTP_STATE.MASTER:
+            hdr.flagField.alternateMasterFlag = False
+        else:
+            print("[WARN] Alternate Master not Implemented")
+        hdr.flagField.unicastFlag = destinationAddress != b''
+        hdr.flagField.profile1 = False
+        hdr.flagField.profile2 = False
+        hdr.flagField.leap61 = self.timePropertiesDS.leap61
+        hdr.flagField.leap59 = self.timePropertiesDS.leap59
+        hdr.flagField.currentUtcOffsetValid = self.timePropertiesDS.currentUtcOffsetValid
+        hdr.flagField.ptpTimescale = self.timePropertiesDS.ptpTimescale
+        hdr.flagField.timeTraceable = self.timePropertiesDS.timeTraceable
+        hdr.flagField.frequencyTraceable = self.timePropertiesDS.frequencyTraceable
+        hdr.correctionField = 0
         hdr.sourcePortIdentity.clockIdentity = p.portIdentity.clockIdentity
         hdr.sourcePortIdentity.portNumber = p.portIdentity.portNumber
-        hdr.sequenceId = None # UInt16 FIX: track sequenceIds
-        hdr.controlField = 0x05 # MsgType dependant
-        hdr.logMessageInterval = p.logAnnounceInterval # MsgType dependant
+        hdr.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, destinationAddress)
+        hdr.controlField = 0x05
+        hdr.logMessageInterval = p.logAnnounceInterval
 
         msg.originTimestamp.secondsField = 0 # UInt48
         msg.originTimestamp.nanosecondsField = 0 # UInt32
@@ -156,27 +179,23 @@ class OrdinaryClock:
         msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
         msg.timeSource = self.timePropertiesDS.timeSource # Enum8
 
-        #self.sendMessage(hdr.bytes() + msg.bytes(), portNumber, DST_MULTICAST)
+        if destinationAddress == b'':
+            destinationAddress = ptp.CONST[p.transport]['destinationAddress']
+        #self.sendMessage(hdr.bytes() + msg.bytes(), portNumber, destinationAddress)
 
     def sendSync(self, portNumber):
         print("[SEND] SYNC (Port %d)" % (portNumber))
         msg = ptp.Sync()
 
 class TransparentClock:
-    def __init__(self, PTP_PROFILE, macAddress, numberPorts):
-        clockIdentity = macAddress # FIX: convert MAC to clockIdentity
+    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
         self.transparentClockDefaultDS = ptp.TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
         self.transparentClockPortDS = { ptp.TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
 
-### Events ###
-
-
-
-
 ### Testing ###
-
-c = OrdinaryClock(ptp.PTP_PROFILE_E2E, -1, 3)
-# tc = TransparentClock(ptp.PTP_PROFILE_E2E, -1, 32)
+clockIdentity = b'\x01\x23\x45\x67\x89\xAB\xCD\xEF'
+c = OrdinaryClock(ptp.PTP_PROFILE_E2E, clockIdentity, 1)
+# tc = TransparentClock(ptp.PTP_PROFILE_E2E, clockIdentity, 32)
 
 # h1 = ptp.Header()
 # h1.transportSpecific = 0 # Nibble
