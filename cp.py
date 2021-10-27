@@ -1,6 +1,6 @@
 #!/bin/python3
 
-import ptp, threading, random
+import ptp, transport, threading, random
 
 ## Custom Classes ##
 
@@ -51,7 +51,7 @@ class OrdinaryClock:
             self.portDS[i+1] = ptp.PortDS(PTP_PROFILE, clockIdentity, i + 1)
             self.portDS[i+1].transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
         self.sequenceTracker = SequenceTracker()
-        # Open Network Socket
+        self.skt = transport.Socket('veth1') # FIX: make configurable
         self.listeningTransition()
 
     def listeningTransition(self):
@@ -181,7 +181,7 @@ class OrdinaryClock:
 
         if destinationAddress == b'':
             destinationAddress = ptp.CONST[p.transport]['destinationAddress']
-        #self.sendMessage(hdr.bytes() + msg.bytes(), portNumber, destinationAddress)
+        self.skt.sendMessage(hdr.bytes() + msg.bytes(), p.transport, portNumber, destinationAddress)
 
     def sendSync(self, portNumber):
         print("[SEND] SYNC (Port %d)" % (portNumber))

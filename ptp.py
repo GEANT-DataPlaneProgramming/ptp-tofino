@@ -206,7 +206,6 @@ class Header:
         self.logMessageInterval = t[10]
 
     def bytes(self):
-        flagField = sum([(2**i) * self.flagField[i] for i in range(len(self.flagField))])
         t = (
         (self.transportSpecific << 4) | self.messageType, \
         self.versionPTP, \
