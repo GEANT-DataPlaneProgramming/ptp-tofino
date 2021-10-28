@@ -4,6 +4,8 @@ import ptp, struct, socket
 
 ETH_P_ALL = 3
 ETH_P_1588 = 0x88F7
+ETH_P_IP = 0x0800
+ETH_P_IPV6 = 0x86DD
 
 class Ethernet:
     parser = struct.Struct('!6s6sH')
@@ -103,15 +105,28 @@ class IPv6:
         return self.parser.pack(*t)
 
 class Socket:
-    def __init__(self, interface):
+    def __init__(self, skt_name):
 
-        self.interface = interface
+        # self.interface = interface # FIX: don't think i need this
         # FIX: Addresses may be per port
         self.eth_addr = b'\x00' * 6
         self.ip4_addr = b'\x00' * 4
         self.ip6_addr = b'\x00' * 16
-        self.s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
-        self.s.bind((interface, ETH_P_ALL))
+        #self.skt = self._unix_socket(skt_name)
+        self.skt = self._packet_socket(skt_name)
+
+    # def _unix_socket(self, path):
+    #     skt = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM, 0)
+    #     skt.bind(path)
+    #     return skt
+
+    def _packet_socket(self, interface):
+        skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
+        skt.bind((interface, ETH_P_ALL))
+        return skt
+
+    def _unix_socket(self):
+        pass
 
     def sendMessage(self, msg, transport, portNumber, destinationAddress):
         cpu = b'' # FIX: Construct CPU Header
@@ -123,4 +138,8 @@ class Socket:
         hdr.src = self.eth_addr
         hdr.dst = destinationAddress
         hdr.type = ETH_P_1588
-        self.s.send(cpu + hdr.bytes() + msg)
+        self.skt.send(cpu + hdr.bytes() + msg)
+
+    def recvmsg(self):
+        MAX_MSG_SIZE = 8192
+        return self.skt.recvmsg(MAX_MSG_SIZE)

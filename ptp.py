@@ -1,6 +1,6 @@
 #!/bin/python3
 
-# TODO: What time scale should be used?
+from copy import copy
 
 from enum import IntEnum
 import struct
@@ -102,6 +102,10 @@ class PortIdentity:
     def __init__(self):
         self.clockIdentity = None # Octet[8]
         self.portNumber = None # UInt16
+
+    def __eq__(self, other):
+        if not instance(other, PortIdentity): return NotImplemented
+        return self.clockIdentity == other.clockIdentity and self.portNumber == other.portNumber
 
 class PortAddress:
     def __init__(self):
@@ -224,7 +228,7 @@ class Header:
 class Announce:
     parser = struct.Struct('!6sLhx3BHB8sHB')
 
-    def __init__(self):
+    def __init__(self, buffer = None):
         self.originTimestamp = TimeStamp()
         # self.originTimestamp.secondsField = None # UInt48
         # self.originTimestamp.nanosecondsField = None # UInt32
@@ -238,6 +242,7 @@ class Announce:
         self.grandmasterIdentity = None # Octet[8]
         self.stepsRemoved = None # UInt16
         self.timeSource = None # Enum8
+        if (buffer): self.parse(buffer)
 
     def parse(self, buffer):
         t = self.parser.unpack(buffer)
@@ -455,7 +460,7 @@ class ParentDS:
         self.observedParentOffsetScaledLogVariance = 0xFFFF # Computation optional
         self.observedParentClockPhaseChangeRate = 0x7FFFFFFF # Computation optional
         self.grandmasterIdentity = defaultDS.clockIdentity
-        self.grandmasterClockQuality = defaultDS.clockQuality
+        self.grandmasterClockQuality = copy(defaultDS.clockQuality)
         self.grandmasterPriority1 = defaultDS.priority1
         self.grandmasterPriority2 = defaultDS.priority2
 
@@ -515,8 +520,6 @@ class TransparentClockPortDS:
 
 ## BMC Data Set
 class ForeignMasterDS:
-    def __init__(self, clockIdentity, portNumber):
-        self.foreignMasterPortIdentity = PortIdentity()
-        self.foreignMasterPortIdentity.clockIdentity = clockIdentity
-        self.foreignMasterPortIdentity.portNumber = portNumber
+    def __init__(self, portIdentity):
+        self.foreignMasterPortIdentity = copy(portIdentity)
         self.foreignMasterAnnounceMessages = 0
