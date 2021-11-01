@@ -104,7 +104,7 @@ class PortIdentity:
         self.portNumber = None # UInt16
 
     def __eq__(self, other):
-        if not instance(other, PortIdentity): return NotImplemented
+        if not isinstance(other, PortIdentity): return NotImplemented
         return self.clockIdentity == other.clockIdentity and self.portNumber == other.portNumber
 
 class PortAddress:
@@ -148,32 +148,32 @@ class FlagField:
 
     def parse(self, buffer):
         flagField = [[(buffer[i] >> j) & 0x01 for j in range(8)] for i in range(len(buffer))]
-        self.alternateMasterFlag = buffer[0][0]
-        self.twoStepFlag = buffer[0][1]
-        self.unicastFlag = buffer[0][2]
-        self.profile1 = buffer[0][5]
-        self.profile2 = buffer[0][6]
-        self.leap61 = buffer[1][0]
-        self.leap59 = buffer[1][1]
-        self.currentUtcOffsetValid = buffer[1][2]
-        self.ptpTimescale = buffer[1][3]
-        self.timeTraceable = buffer[1][4]
-        self.frequencyTraceable = buffer[1][5]
+        self.alternateMasterFlag = flagField[0][0]
+        self.twoStepFlag = flagField[0][1]
+        self.unicastFlag = flagField[0][2]
+        self.profile1 = flagField[0][5]
+        self.profile2 = flagField[0][6]
+        self.leap61 = flagField[1][0]
+        self.leap59 = flagField[1][1]
+        self.currentUtcOffsetValid = flagField[1][2]
+        self.ptpTimescale = flagField[1][3]
+        self.timeTraceable = flagField[1][4]
+        self.frequencyTraceable = flagField[1][5]
 
     def bytes(self):
-        buffer = [[False]*8,[False]*8]
-        buffer[0][0] = self.alternateMasterFlag
-        buffer[0][1] = self.twoStepFlag
-        buffer[0][2] = self.unicastFlag
-        buffer[0][5] = self.profile1
-        buffer[0][6] = self.profile2
-        buffer[1][0] = self.leap61
-        buffer[1][1] = self.leap59
-        buffer[1][2] = self.currentUtcOffsetValid
-        buffer[1][3] = self.ptpTimescale
-        buffer[1][4] = self.timeTraceable
-        buffer[1][5] = self.frequencyTraceable
-        l = [sum([(2**j) * buffer[i][j] for j in range(8) ]) for i in range(len(buffer))]
+        flagField = [[False]*8,[False]*8]
+        flagField[0][0] = self.alternateMasterFlag
+        flagField[0][1] = self.twoStepFlag
+        flagField[0][2] = self.unicastFlag
+        flagField[0][5] = self.profile1
+        flagField[0][6] = self.profile2
+        flagField[1][0] = self.leap61
+        flagField[1][1] = self.leap59
+        flagField[1][2] = self.currentUtcOffsetValid
+        flagField[1][3] = self.ptpTimescale
+        flagField[1][4] = self.timeTraceable
+        flagField[1][5] = self.frequencyTraceable
+        l = [sum([(2**j) * flagField[i][j] for j in range(8) ]) for i in range(len(flagField))]
         return struct.pack('2B', *l)
 
 class Header:

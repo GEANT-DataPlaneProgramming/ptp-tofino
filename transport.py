@@ -125,9 +125,6 @@ class Socket:
         skt.bind((interface, ETH_P_ALL))
         return skt
 
-    def _unix_socket(self):
-        pass
-
     def sendMessage(self, msg, transport, portNumber, destinationAddress):
         cpu = b'' # FIX: Construct CPU Header
         if transport == ptp.PTP_PROTO.ETHERNET:
@@ -142,4 +139,5 @@ class Socket:
 
     def recvmsg(self):
         MAX_MSG_SIZE = 8192
-        return self.skt.recvmsg(MAX_MSG_SIZE)
+        msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
+        return msg
