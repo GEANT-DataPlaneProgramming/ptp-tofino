@@ -137,7 +137,9 @@ class Socket:
         hdr.type = ETH_P_1588
         self.skt.send(cpu + hdr.bytes() + msg)
 
-    def recvmsg(self):
+    def listen(self, handler):
         MAX_MSG_SIZE = 8192
-        msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
-        return msg
+
+        while (True):
+            msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
+            handler(msg)

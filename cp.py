@@ -1,6 +1,7 @@
 #!/bin/python3
 
 import ptp, transport, threading, random
+from ptp_datasets import *
 from copy import copy
 from optparse import OptionParser
 
@@ -24,6 +25,7 @@ class Timer:
         self.i = interval
         self.f = function
         self.args = args
+        self.t = None
 
     def _run(self, args):
         self.start()
@@ -34,95 +36,95 @@ class Timer:
         self.t.start()
 
     def stop(self):
-        self.t.cancel()
+        if (self.t): self.t.cancel()
 
     def reset(self):
         self.stop()
         self.start()
+
+class Port:
+    def __init__(self, profile, clock, portNumber):
+        self.portDS = PortDS(profile, clock.defaultDS.clockIdentity, portNumber)
+        self.foreignMasterList = ForeignMasterList()
+        self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
+
+        announceInterval = 2 ** self.portDS.logAnnounceInterval
+        syncInterval = 2 ** self.portDS.logSyncInterval
+        announceReceiptTimeoutInterval = self.portDS.announceReceiptTimeout * announceInterval
+        announceReceiptTimeoutInterval += (announceInterval * random.random())
+
+        self.announeTimer = Timer(announceInterval, clock.sendAnnounce, [portNumber])
+        self.syncTimer = Timer(syncInterval, clock.sendSync, [portNumber])
+        self.announceReceiptTimeoutTimer = Timer(announceReceiptTimeoutInterval, clock.announceReceiptTimeoutEvent, [portNumber])
 
 class OrdinaryClock:
     def __init__(self, PTP_PROFILE, clockIdentity, numberPorts, interface):
         print("[INFO] Clock ID: %s" % (clockIdentity.hex()))
         print("[EVENT] POWERUP (All Ports)")
         print("[STATE] INITIALIZING (All Ports)")
-        self.defaultDS = ptp.DefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
-        self.currentDS = ptp.CurrentDS()
-        self.parentDS = ptp.ParentDS(self.defaultDS)
-        self.timePropertiesDS = ptp.TimePropertiesDS()
-        self.portDS = {}
+        self.defaultDS = DefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
+        self.currentDS = CurrentDS()
+        self.parentDS = ParentDS(self.defaultDS)
+        self.timePropertiesDS = TimePropertiesDS()
+        self.portList = {}
         for i in range(numberPorts):
-            self.portDS[i+1] = ptp.PortDS(PTP_PROFILE, clockIdentity, i + 1)
-            self.portDS[i+1].transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
-        self.sequenceTracker = SequenceTracker()
+            self.portList[i+1] = Port(PTP_PROFILE, self, i + 1)
+        self.sequenceTracker = SequenceTracker() # FIX: per port(?)
         self.skt = transport.Socket(interface)
         self.listeningTransition()
+        self.skt.listen(self.packetHandler) # FIX: should this be before transition
 
-    def listen(self):
+    def packetHandler(self, buffer):
         CPU_HDR_SIZE = 0
         ETH_HDR_SIZE = 14
-        offset = 0
 
-        while (True):
-            buffer = self.skt.recvmsg()
+        # cpu = tofino.CPU(buffer[:CPU_HDR_SIZE]) # FIX: implement CPU header
+        buffer = buffer[CPU_HDR_SIZE:]
+        metadata = { 'portNumber': 1 } # FIX: get port number from CPU header
 
-            # cpu = tofino.CPU(buffer[:CPU_HDR_SIZE]) # FIX: implement CPU header
-            buffer = buffer[CPU_HDR_SIZE:]
-            portNumber = 1 # FIX get port number for CPU header
+        eth = transport.Ethernet()
+        eth.parse(buffer[:ETH_HDR_SIZE])
+        buffer = buffer[ETH_HDR_SIZE:]
 
-            eth = transport.Ethernet()
-            eth.parse(buffer[:ETH_HDR_SIZE])
-            buffer = buffer[ETH_HDR_SIZE:]
+        if eth.type == transport.ETH_P_1588:
+            self.recvMessage(buffer, metadata)
+        elif eth.type == transport.ETH_P_IP:
+            pass # FIX: parseIPv4_UDP(), maybe recv
+        elif eth.type == transport.ETH_P_IPV6:
+            pass # FIX: parseIPv6_UDP(), maybe recv
 
-            if eth.type == transport.ETH_P_IP:
-                pass # FIX: parseIPv4_UDP()
-            elif eth.type == transport.ETH_P_IPV6:
-                pass # FIX: parseIPv6_UDP()
-            elif eth.type != transport.ETH_P_1588:
-                continue # Ignore Message, not a PTP message
-
-            hdr = ptp.Header()
-            hdr.parse(buffer[:hdr.parser.size])
-            buffer = buffer[hdr.parser.size:]
-
-            # Check if message is from the same clock
-            if hdr.sourcePortIdentity.clockIdentity == self.defaultDS.clockIdentity:
-                if hdr.sourcePortIdentity == self.portDS[portNumber].sourcePortIdentity:
-                    print("[WARN] Message received by sending port (%d)" % (portNumber))
-                else:
-                    print("[WARN] Message received by sending clock (%d)" % (portNumber))
-                    # FIX: put all but lowest numbered port in PASSIVE state
-                continue # Ignore Message
-
+    def recvMessage(self, buffer, metadata):
+        hdr = ptp.Header(buffer)
+        portNumber = metadata['portNumber']
+        # Check if message is from the same clock
+        if hdr.sourcePortIdentity.clockIdentity == self.defaultDS.clockIdentity:
+            if hdr.sourcePortIdentity == self.portList[portNumber].portDS.sourcePortIdentity:
+                print("[WARN] Message received by sending port (%d)" % (portNumber))
+            else:
+                print("[WARN] Message received by sending clock (%d)" % (portNumber))
+                # FIX: put all but lowest numbered port in PASSIVE state
+        else:
             if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
-                msg = ptp.Announce(buffer[:ptp.Announce.parser.size])
-                self.recvAnnounce(hdr, msg, portNumber)
-            # FIX: parse other message types
+                self.recvAnnounce(ptp.Announce(buffer), portNumber)
+            # FIX: Handle other message types
 
     ## Transitions ##
 
     def listeningTransition(self):
         print("[STATE] LISTENING (All Ports)")
-        for p in self.portDS.values():
-            p.portState = ptp.PTP_STATE.LISTENING
-            announceInterval = 2 ** p.logAnnounceInterval
-            announceReceiptTimeoutInterval = p.announceReceiptTimeout * announceInterval
-            interval = announceReceiptTimeoutInterval + (announceInterval * random.random())
-            p.announceReceiptTimeoutTimer = Timer(interval, self.announceReceiptTimeoutEvent, [p.portIdentity.portNumber])
-            p.announceReceiptTimeoutTimer.start()
+        for port in self.portList.values():
+            port.portDS.portState = ptp.PTP_STATE.LISTENING
+            port.announceReceiptTimeoutTimer.start()
 
     def masterTransition(self, portNumber):
         print("[STATE] (%d) MASTER" % (portNumber))
-        p = self.portDS[portNumber]
-        p.announceReceiptTimeoutTimer.stop()
-        p.portState = ptp.PTP_STATE.MASTER
-        announceInterval = 2 ** p.logAnnounceInterval
+        port = self.portList[portNumber]
+        port.announceReceiptTimeoutTimer.stop()
+        port.announeTimer.start()
+        port.syncTimer.start()
+        port.portDS.portState = ptp.PTP_STATE.MASTER
         self.sendAnnounce(portNumber)
-        p.announeTimer = Timer(announceInterval, self.sendAnnounce, [portNumber])
-        p.announeTimer.start()
-        syncInterval = 2 ** p.logSyncInterval
         self.sendSync(portNumber)
-        p.syncTimer = Timer(syncInterval, self.sendSync, [portNumber])
-        p.syncTimer.start()
 
     ## Updates ##
 
@@ -186,9 +188,9 @@ class OrdinaryClock:
     def announceReceiptTimeoutEvent(self, portNumber):
         print("[EVENT] ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES (Port %d)" % (portNumber))
         valid_states = (ptp.PTP_STATE.LISTENING, ptp.PTP_STATE.UNCALIBRATED, ptp.PTP_STATE.SLAVE, ptp.PTP_STATE.PASSIVE)
-        if self.portDS[portNumber].portState in valid_states:
-            p = self.portDS[portNumber]
-            if ptp.PTP_STATE.SLAVE in [p.portState for p in self.portDS.values() if p.portIdentity.portNumber != portNumber]:
+        if self.portList[portNumber].portDS.portState in valid_states:
+            pDS = self.portList[portNumber].portDS
+            if ptp.PTP_STATE.SLAVE in [port.portDS.portState for port in self.portList.values() if port.portDS.portIdentity.portNumber != portNumber]:
                 self.updateM3(portNumber)
             else:
                 self.updateM1M2(portNumber)
@@ -206,50 +208,47 @@ class OrdinaryClock:
 
     def sendAnnounce(self, portNumber, destinationAddress = b''):
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
-        p = self.portDS[portNumber]
-        hdr = ptp.Header()
+        pDS = self.portList[portNumber].portDS
+        transport = self.portList[portNumber].transport
         msg = ptp.Announce()
 
-        hdr.transportSpecific = ptp.CONST[p.transport]['transportSpecific']
-        hdr.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
-        hdr.versionPTP = p.versionNumber
-        hdr.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
-        hdr.domainNumber = self.defaultDS.domainNumber
-        if p.portState == ptp.PTP_STATE.MASTER:
-            hdr.flagField.alternateMasterFlag = False
+        msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+        msg.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
+        msg.versionPTP = pDS.versionNumber
+        msg.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
+        msg.domainNumber = self.defaultDS.domainNumber
+        if pDS.portState == ptp.PTP_STATE.MASTER:
+            msg.flagField.alternateMasterFlag = False
         else:
             print("[WARN] Alternate Master not Implemented")
-        hdr.flagField.unicastFlag = destinationAddress != b''
-        hdr.flagField.profile1 = False
-        hdr.flagField.profile2 = False
-        hdr.flagField.leap61 = self.timePropertiesDS.leap61
-        hdr.flagField.leap59 = self.timePropertiesDS.leap59
-        hdr.flagField.currentUtcOffsetValid = self.timePropertiesDS.currentUtcOffsetValid
-        hdr.flagField.ptpTimescale = self.timePropertiesDS.ptpTimescale
-        hdr.flagField.timeTraceable = self.timePropertiesDS.timeTraceable
-        hdr.flagField.frequencyTraceable = self.timePropertiesDS.frequencyTraceable
-        hdr.correctionField = 0
-        hdr.sourcePortIdentity.clockIdentity = p.portIdentity.clockIdentity
-        hdr.sourcePortIdentity.portNumber = p.portIdentity.portNumber
-        hdr.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, destinationAddress)
-        hdr.controlField = 0x05
-        hdr.logMessageInterval = p.logAnnounceInterval
+        msg.flagField.unicastFlag = destinationAddress != b''
+        msg.flagField.profile1 = False
+        msg.flagField.profile2 = False
+        msg.flagField.leap61 = self.timePropertiesDS.leap61
+        msg.flagField.leap59 = self.timePropertiesDS.leap59
+        msg.flagField.currentUtcOffsetValid = self.timePropertiesDS.currentUtcOffsetValid
+        msg.flagField.ptpTimescale = self.timePropertiesDS.ptpTimescale
+        msg.flagField.timeTraceable = self.timePropertiesDS.timeTraceable
+        msg.flagField.frequencyTraceable = self.timePropertiesDS.frequencyTraceable
+        msg.correctionField = 0
+        msg.sourcePortIdentity = copy(pDS.portIdentity)
+        msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, destinationAddress)
+        msg.controlField = 0x05
+        msg.logMessageInterval = pDS.logAnnounceInterval
 
         msg.originTimestamp.secondsField = 0 # UInt48
         msg.originTimestamp.nanosecondsField = 0 # UInt32
         msg.currentUtcOffset = self.timePropertiesDS.currentUtcOffset # Int16
         msg.grandmasterPriority1 = self.parentDS.grandmasterPriority1 # UInt8
-        msg.grandmasterClockQuality.clockClass = self.parentDS.grandmasterClockQuality.clockClass # UInt8
-        msg.grandmasterClockQuality.clockAccuracy = self.parentDS.grandmasterClockQuality.clockAccuracy # Enum8
-        msg.grandmasterClockQuality.offsetScaledLogVariance = self.parentDS.grandmasterClockQuality.offsetScaledLogVariance # UInt16
+        msg.grandmasterClockQuality = copy(self.parentDS.grandmasterClockQuality)
         msg.grandmasterPriority2 = self.parentDS.grandmasterPriority1 # UInt8
         msg.grandmasterIdentity = self.parentDS.grandmasterIdentity # Octet[8]
         msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
         msg.timeSource = self.timePropertiesDS.timeSource # Enum8
 
         if destinationAddress == b'':
-            destinationAddress = ptp.CONST[p.transport]['destinationAddress']
-        self.skt.sendMessage(hdr.bytes() + msg.bytes(), p.transport, portNumber, destinationAddress)
+            destinationAddress = ptp.CONST[transport]['destinationAddress']
+        self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
 
     def sendSync(self, portNumber):
         print("[SEND] SYNC (Port %d)" % (portNumber))
@@ -257,28 +256,22 @@ class OrdinaryClock:
 
     ## Recv Messages ##
 
-    def recvAnnounce(self, hdr, msg, portNumber):
+    def recvAnnounce(self, msg, portNumber):
         print("[RECV] Announce (Port %d)" % (portNumber))
-        p = self.portDS[portNumber]
-        if p.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
+        pDS = self.portList[portNumber].portDS
+        if pDS.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
             print("[RECV] (%d) Ignoring Announce due to state" % (portNumber))
-        elif p.portState == ptp.PTP_STATE.SLAVE and self.parentDS.parentPortIdentity == msg.sourcePortIdentity:
+        elif pDS.portState == ptp.PTP_STATE.SLAVE and self.parentDS.parentPortIdentity == msg.sourcePortIdentity:
             print("[RECV] (%d) Received Announce from Master" % (portNumber))
-            self.updateS1(hdr, msg)
+            self.updateS1(msg)
         else:
-            for e in self.portDS[portNumber].foreignMasterDS:
-                if e.foreignMasterPortIdentity == hdr.sourcePortIdentity:
-                    print("[RECV] (%d) Received Announce from existingForeign Master" % (portNumber))
-                    e.foreignMasterAnnounceMessages += 1
-                    break
-            else:
-                print("[RECV] (%d) Received Announce from new Foreign Master" % (portNumber))
-                self.portDS[portNumber].foreignMasterDS.add(ptp.ForeignMasterDS(hdr.sourcePortIdentity))
+            print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
+            self.portList[portNumber].foreignMasterList.update(msg)
 
 class TransparentClock:
     def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
-        self.transparentClockDefaultDS = ptp.TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
-        self.transparentClockPortDS = { ptp.TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
+        self.transparentClockDefaultDS = TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
+        self.transparentClockPortDS = { TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts) }
 
 ### Main
 
@@ -293,4 +286,3 @@ parser.add_option("-i", "--interface", dest="interface", default='veth1')
 (options, args) = parser.parse_args()
 
 c = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
-c.listen()

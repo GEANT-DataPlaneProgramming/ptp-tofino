@@ -1,10 +1,7 @@
 #!/bin/python3
 
-from copy import copy
-
 from enum import IntEnum
 import struct
-#from threading import Timer
 
 class PTP_TIME_SRC(IntEnum):
     ATOMIC_CLOCK = 0x10
@@ -179,7 +176,7 @@ class FlagField:
 class Header:
     parser = struct.Struct('!2BHBx2sq4x8sHHBb')
 
-    def __init__(self):
+    def __init__(self, buffer = b''):
         self.transportSpecific = None # Nibble
         self.messageType = None # Enumneration4
         self.versionPTP = None # UInt4
@@ -193,9 +190,10 @@ class Header:
         self.sequenceId = None # UInt16
         self.controlField = None # UInt8
         self.logMessageInterval = None # Int8
+        if (buffer): self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        t = Header.parser.unpack(buffer[:Header.parser.size])
         self.transportSpecific = t[0] >> 4
         self.messageType = t[0] & 0x0F
         self.versionPTP = t[1] & 0x0F
@@ -223,12 +221,13 @@ class Header:
         self.controlField, \
         self.logMessageInterval \
         )
-        return self.parser.pack(*t)
+        return Header.parser.pack(*t)
 
-class Announce:
+class Announce(Header):
     parser = struct.Struct('!6sLhx3BHB8sHB')
 
-    def __init__(self, buffer = None):
+    def __init__(self, buffer = b''):
+        Header.__init__(self)
         self.originTimestamp = TimeStamp()
         # self.originTimestamp.secondsField = None # UInt48
         # self.originTimestamp.nanosecondsField = None # UInt32
@@ -245,7 +244,8 @@ class Announce:
         if (buffer): self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        Header.parse(self, buffer[:Header.parser.size])
+        t = Announce.parser.unpack(buffer[Header.parser.size:])
         self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
         self.originTimestamp.nanosecondsField = t[1]
         self.currentUtcOffset = t[2]
@@ -259,6 +259,7 @@ class Announce:
         self.timeSource = t[10]
 
     def bytes(self):
+        header_bytes = Header.bytes(self)
         t = (
         struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
         self.originTimestamp.nanosecondsField, \
@@ -272,7 +273,7 @@ class Announce:
         self.stepsRemoved, \
         self.timeSource \
         )
-        return self.parser.pack(*t)
+        return header_bytes + Announce.parser.pack(*t)
 
 class Sync:
     parser = struct.Struct('!6sL')
@@ -419,107 +420,3 @@ class Pdelay_Resp_Follow_Up:
         self.requestingPortIdentity.portNumber \
         )
         return self.parser.pack(*t)
-
-### Ordinary and Boundary Clock Data Sets
-## Clock Data Sets
-
-# TODO: Retrieve HW dependant values
-# TODO: Allow configured values to override PTP profile
-
-class DefaultDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
-        # Static Members
-        self.twoStepFlag = True # FIX: HW Dependant
-        self.clockIdentity = clockIdentity
-        self.numberPorts = numberPorts
-        # Dynamic Members
-        self.clockQuality = ClockQuality() # after slaveOnly
-        self.clockQuality.clockClass = 248 # FIX: or 255 if slaveOnly
-        self.clockQuality.clockAccuracy = 0xFE # Unknown
-        self.clockQuality.offsetScaledLogVariance = 0xffff # not computed
-        # Configurable Members
-        self.priority1 = PTP_PROFILE['defaultDS.priority1']
-        self.priority2 = PTP_PROFILE['defaultDS.priority2']
-        self.domainNumber = PTP_PROFILE['defaultDS.domainNumber']
-        self.slaveOnly = PTP_PROFILE['defaultDS.slaveOnly']
-
-class CurrentDS:
-    def __init__(self):
-        # All members are Dynamic
-        self.stepsRemoved = 0
-        self.offsetFromMaster = 0 # Implementation-specific (ns * 2^16)
-        self.meanPathDelay = 0 # Implementation-specific (ns * 2^16)
-
-class ParentDS:
-    def __init__(self, defaultDS):
-        # All members are Dynamic
-        self.parentPortIdentity = PortIdentity()
-        self.parentPortIdentity.clockIdentity = defaultDS.clockIdentity
-        self.parentPortIdentity.portNumber = 0
-        self.parentStats = False # Computation optional
-        self.observedParentOffsetScaledLogVariance = 0xFFFF # Computation optional
-        self.observedParentClockPhaseChangeRate = 0x7FFFFFFF # Computation optional
-        self.grandmasterIdentity = defaultDS.clockIdentity
-        self.grandmasterClockQuality = copy(defaultDS.clockQuality)
-        self.grandmasterPriority1 = defaultDS.priority1
-        self.grandmasterPriority2 = defaultDS.priority2
-
-class TimePropertiesDS:
-    def __init__(self):
-        # All members are Dynamic
-        self.currentUtcOffset = 37 # TAI - UTC, No meaning when ptpTimescale is false
-        self.currentUtcOffsetValid = False
-        self.leap59 = False
-        self.leap61 = False
-        self.timeTraceable = False
-        self.frequencyTraceable = False
-        self.ptpTimescale = False # initialized first, use arbitary timescale
-        self.timeSource = PTP_TIME_SRC.INTERNAL_OSCILLATOR
-
-class PortDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, portNumber):
-        # Static Members
-        self.portIdentity = PortIdentity()
-        self.portIdentity.clockIdentity = clockIdentity
-        self.portIdentity.portNumber = portNumber
-        # Dynamic Members
-        self.portState = PTP_STATE.INITIALIZING
-        self.logMinDelayReqInterval = PTP_PROFILE['portDS.logMinDelayReqInterval']
-        self.peerMeanPathDelay = 0
-        # Configurable Members
-        self.logAnnounceInterval = PTP_PROFILE['portDS.logAnnounceInterval']
-        self.announceReceiptTimeout = PTP_PROFILE['portDS.announceReceiptTimeout']
-        self.logSyncInterval = PTP_PROFILE['portDS.logSyncInterval']
-        self.delayMechanism = PTP_PROFILE['portDS.delayMechanism']
-        self.logMinPdelayReqInterval = PTP_PROFILE['portDS.logMinPdelayReqInterval']
-        self.versionNumber = 2
-        # Implementation Specific
-        self.foreignMasterDS = set()
-
-## Transparent Clock Data Sets
-
-class TransparentClockDefaultDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
-        # Static Memebrs
-        self.clockIdentity = clockIdentity
-        self.numberPorts = numberPorts
-        # Configurable Members
-        self.delayMechanism = PTP_PROFILE['portDS.delayMechanism']
-        self.primaryDomain = 0
-
-class TransparentClockPortDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, portNumber):
-        # Satic Members
-        self.portIdentity = PortIdentity()
-        self.portIdentity.clockIdentity = clockIdentity
-        self.portIdentity.portNumber = portNumber
-        # Dynamic Members
-        self.logMinPdelayReqInterval = PTP_PROFILE['portDS.logMinPdelayReqInterval']
-        self.faultyFlag = False
-        self.peerMeanPathDelay = 0
-
-## BMC Data Set
-class ForeignMasterDS:
-    def __init__(self, portIdentity):
-        self.foreignMasterPortIdentity = copy(portIdentity)
-        self.foreignMasterAnnounceMessages = 0
