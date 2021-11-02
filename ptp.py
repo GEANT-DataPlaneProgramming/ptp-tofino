@@ -1,5 +1,7 @@
 #!/bin/python3
 
+# pylint: disable=invalid-name
+
 from enum import IntEnum
 import struct
 
@@ -158,7 +160,7 @@ class FlagField:
         self.frequencyTraceable = flagField[1][5]
 
     def bytes(self):
-        flagField = [[False]*8,[False]*8]
+        flagField = [[False]*8, [False]*8]
         flagField[0][0] = self.alternateMasterFlag
         flagField[0][1] = self.twoStepFlag
         flagField[0][2] = self.unicastFlag
@@ -170,13 +172,13 @@ class FlagField:
         flagField[1][3] = self.ptpTimescale
         flagField[1][4] = self.timeTraceable
         flagField[1][5] = self.frequencyTraceable
-        l = [sum([(2**j) * flagField[i][j] for j in range(8) ]) for i in range(len(flagField))]
+        l = [sum([(2**j) * flagField[i][j] for j in range(8)]) for i in range(len(flagField))]
         return struct.pack('2B', *l)
 
 class Header:
     parser = struct.Struct('!2BHBx2sq4x8sHHBb')
 
-    def __init__(self, buffer = b''):
+    def __init__(self, buffer=b''):
         self.transportSpecific = None # Nibble
         self.messageType = None # Enumneration4
         self.versionPTP = None # UInt4
@@ -190,7 +192,7 @@ class Header:
         self.sequenceId = None # UInt16
         self.controlField = None # UInt8
         self.logMessageInterval = None # Int8
-        if (buffer): self.parse(buffer)
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
         t = Header.parser.unpack(buffer[:Header.parser.size])
@@ -209,24 +211,24 @@ class Header:
 
     def bytes(self):
         t = (
-        (self.transportSpecific << 4) | self.messageType, \
-        self.versionPTP, \
-        self.messageLength, \
-        self.domainNumber,
-        self.flagField.bytes(), \
-        self.correctionField, \
-        self.sourcePortIdentity.clockIdentity, \
-        self.sourcePortIdentity.portNumber, \
-        self.sequenceId, \
-        self.controlField, \
-        self.logMessageInterval \
+            (self.transportSpecific << 4) | self.messageType,
+            self.versionPTP,
+            self.messageLength,
+            self.domainNumber,
+            self.flagField.bytes(),
+            self.correctionField,
+            self.sourcePortIdentity.clockIdentity,
+            self.sourcePortIdentity.portNumber,
+            self.sequenceId,
+            self.controlField,
+            self.logMessageInterval
         )
         return Header.parser.pack(*t)
 
 class Announce(Header):
     parser = struct.Struct('!6sLhx3BHB8sHB')
 
-    def __init__(self, buffer = b''):
+    def __init__(self, buffer=b''):
         Header.__init__(self)
         self.originTimestamp = TimeStamp()
         # self.originTimestamp.secondsField = None # UInt48
@@ -241,7 +243,7 @@ class Announce(Header):
         self.grandmasterIdentity = None # Octet[8]
         self.stepsRemoved = None # UInt16
         self.timeSource = None # Enum8
-        if (buffer): self.parse(buffer)
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
@@ -261,17 +263,17 @@ class Announce(Header):
     def bytes(self):
         header_bytes = Header.bytes(self)
         t = (
-        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
-        self.originTimestamp.nanosecondsField, \
-        self.currentUtcOffset, \
-        self.grandmasterPriority1, \
-        self.grandmasterClockQuality.clockClass, \
-        self.grandmasterClockQuality.clockAccuracy, \
-        self.grandmasterClockQuality.offsetScaledLogVariance, \
-        self.grandmasterPriority2, \
-        self.grandmasterIdentity, \
-        self.stepsRemoved, \
-        self.timeSource \
+            struct.pack('!Q', self.originTimestamp.secondsField)[2:8],
+            self.originTimestamp.nanosecondsField,
+            self.currentUtcOffset,
+            self.grandmasterPriority1,
+            self.grandmasterClockQuality.clockClass,
+            self.grandmasterClockQuality.clockAccuracy,
+            self.grandmasterClockQuality.offsetScaledLogVariance,
+            self.grandmasterPriority2,
+            self.grandmasterIdentity,
+            self.stepsRemoved,
+            self.timeSource
         )
         return header_bytes + Announce.parser.pack(*t)
 
@@ -290,8 +292,8 @@ class Sync:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
-        self.originTimestamp.nanosecondsField \
+            struct.pack('!Q', self.originTimestamp.secondsField)[2:8],
+            self.originTimestamp.nanosecondsField
         )
         return self.parser.pack(*t)
 
@@ -312,8 +314,8 @@ class Follow_Up:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.preciseOriginTimestamp.secondsField)[2:8], \
-        self.preciseOriginTimestamp.nanosecondsField \
+            struct.pack('!Q', self.preciseOriginTimestamp.secondsField)[2:8],
+            self.preciseOriginTimestamp.nanosecondsField
         )
         return self.parser.pack(*t)
 
@@ -338,10 +340,10 @@ class Delay_Resp:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.receiveTimestamp.secondsField)[2:8], \
-        self.receiveTimestamp.nanosecondsField, \
-        self.requestingPortIdentity.clockIdentity, \
-        self.requestingPortIdentity.portNumber \
+            struct.pack('!Q', self.receiveTimestamp.secondsField)[2:8],
+            self.receiveTimestamp.nanosecondsField,
+            self.requestingPortIdentity.clockIdentity,
+            self.requestingPortIdentity.portNumber
         )
         return self.parser.pack(*t)
 
@@ -360,8 +362,8 @@ class Pdelay_Req:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.originTimestamp.secondsField)[2:8], \
-        self.originTimestamp.nanosecondsField \
+            struct.pack('!Q', self.originTimestamp.secondsField)[2:8],
+            self.originTimestamp.nanosecondsField
         )
         return self.parser.pack(*t)
 
@@ -386,10 +388,10 @@ class Pdelay_Resp:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.requestReceiptTimestamp.secondsField)[2:8], \
-        self.requestReceiptTimestamp.nanosecondsField, \
-        self.requestingPortIdentity.clockIdentity, \
-        self.requestingPortIdentity.portNumber \
+            struct.pack('!Q', self.requestReceiptTimestamp.secondsField)[2:8],
+            self.requestReceiptTimestamp.nanosecondsField,
+            self.requestingPortIdentity.clockIdentity,
+            self.requestingPortIdentity.portNumber
         )
         return self.parser.pack(*t)
 
@@ -414,9 +416,9 @@ class Pdelay_Resp_Follow_Up:
 
     def bytes(self):
         t = (
-        struct.pack('!Q', self.responseOriginTimestamp.secondsField)[2:8], \
-        self.responseOriginTimestamp.nanosecondsField, \
-        self.requestingPortIdentity.clockIdentity, \
-        self.requestingPortIdentity.portNumber \
+            struct.pack('!Q', self.responseOriginTimestamp.secondsField)[2:8],
+            self.responseOriginTimestamp.nanosecondsField,
+            self.requestingPortIdentity.clockIdentity,
+            self.requestingPortIdentity.portNumber
         )
         return self.parser.pack(*t)

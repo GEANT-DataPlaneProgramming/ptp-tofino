@@ -1,8 +1,9 @@
 #!/bin/python3
 
-from ptp import *
 from copy import copy
-import collections, time
+import collections
+import time
+from ptp import *
 
 ### Ordinary and Boundary Clock Data Sets
 ## Clock Data Sets
@@ -108,7 +109,7 @@ class ForeignMasterList:
         def __init__(self, msg):
             self.foreignMasterPortIdentity = copy(msg.sourcePortIdentity)
             self.foreignMasterAnnounceMessages = 0
-            self.timestamps = collections.deque([],2)
+            self.timestamps = collections.deque([], 2)
             self.msg = None
             self.update(msg)
 
@@ -119,11 +120,11 @@ class ForeignMasterList:
 
         def comparison1(self):
             return [self.msg.grandmasterPriority1,
-                self.msg.grandmasterClockQuality.clockClass,
-                self.msg.grandmasterClockQuality.clockAccuracy,
-                self.msg.grandmasterClockQuality.offsetScaledLogVariance,
-                self.msg.grandmasterPriority2,
-                self.msg.grandmasterIdentity]
+                    self.msg.grandmasterClockQuality.clockClass,
+                    self.msg.grandmasterClockQuality.clockAccuracy,
+                    self.msg.grandmasterClockQuality.offsetScaledLogVariance,
+                    self.msg.grandmasterPriority2,
+                    self.msg.grandmasterIdentity]
 
         def comparison2(self):
             pass
@@ -133,19 +134,19 @@ class ForeignMasterList:
         self.e_rbest = None
 
     def update(self, msg):
-        for e in self.entries:
-            if e.foreignMasterPortIdentity == msg.sourcePortIdentity:
-                e.update(msg)
+        for entry in self.entries:
+            if entry.foreignMasterPortIdentity == msg.sourcePortIdentity:
+                entry.update(msg)
                 break
         else:
             self.entries.add(self.ForeignMasterDS(msg))
 
     def getBest(self, announceInterval):
         ts_threshold = time.monotonic() - (4 * announceInterval)
-        for e in self.entries:
-            if len(d) < 2: continue
-            if e.timestamps[0] < ts_threshold: continue
-            if e.msg.stepsRemoved > 255: continue
+        for entry in self.entries:
+            if len(entry) < 2: continue
+            if entry.timestamps[0] < ts_threshold: continue
+            if entry.msg.stepsRemoved > 255: continue
 
     def getBetter(self, a, b):
         if a == b:

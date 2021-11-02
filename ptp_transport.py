@@ -1,6 +1,10 @@
 #!/bin/python3
 
-import ptp, struct, socket
+# pylint: disable=invalid-name
+
+import struct
+import socket
+import ptp
 
 ETH_P_ALL = 3
 ETH_P_1588 = 0x88F7
@@ -64,7 +68,6 @@ class IPv4:
 
     def parse(self, buffer):
         pass
-        self.dst = t[5]
 
     def bytes(self):
         pass
@@ -140,6 +143,6 @@ class Socket:
     def listen(self, handler):
         MAX_MSG_SIZE = 8192
 
-        while (True):
+        while True:
             msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
             handler(msg)
