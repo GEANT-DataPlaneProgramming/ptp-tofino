@@ -1,14 +1,23 @@
 #!/bin/python3
 
 # pylint: disable=invalid-name
+# pylint: disable=missing-function-docstring
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-module-docstring
+# pylint: disable=line-too-long
+# pylint: disable=too-few-public-methods
+# pylint: disable=too-many-instance-attributes
+# pylint: disable=multiple-statements
 
 from copy import copy
 from optparse import OptionParser
 import threading
 import random
+import time
 import ptp
 import ptp_transport
-from ptp_datasets import *
+from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
+from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS
 
 ## Custom Classes ##
 
@@ -32,9 +41,9 @@ class Timer:
         self.args = args
         self.t = None
 
-    def _run(self, args):
+    def _run(self, *args):
         self.start()
-        self.f(args)
+        self.f(*args)
 
     def start(self):
         self.t = threading.Timer(self.i, self._run, self.args)
@@ -50,7 +59,8 @@ class Timer:
 class Port:
     def __init__(self, profile, clock, portNumber):
         self.portDS = PortDS(profile, clock.defaultDS.clockIdentity, portNumber)
-        self.foreignMasterList = ForeignMasterList()
+        self.e_rbest = None
+        self.foreignMasterList = set()
         self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
 
         announceInterval = 2 ** self.portDS.logAnnounceInterval
@@ -62,18 +72,51 @@ class Port:
         self.syncTimer = Timer(syncInterval, clock.sendSync, [portNumber])
         self.announceReceiptTimeoutTimer = Timer(announceReceiptTimeoutInterval, clock.announceReceiptTimeoutEvent, [portNumber])
 
+    def updateForeignMasterList(self, msg):
+        for fmDS in self.foreignMasterList:
+            if fmDS.foreignMasterPortIdentity == msg.sourcePortIdentity:
+                fmDS.update(msg, self.portDS)
+                break
+        else:
+            self.foreignMasterList.add(ForeignMasterDS(msg, self.portDS))
+
+    def calc_e_rbest(self):
+        print("[BMC] (%d) Calculating E rbest" % (self.portDS.portIdentity.portNumber))
+        announceInterval = 2 ** self.portDS.logAnnounceInterval
+        ts_threshold = time.monotonic() - (4 * announceInterval)
+        qualified = [
+            fmDS.entry for fmDS in self.foreignMasterList
+            if len([ts for ts in fmDS.timestamps if ts > ts_threshold]) == 2
+            and fmDS.entry.steps_removed < 255
+        ]
+        if self.portDS.portState == ptp.PTP_STATE.SLAVE and self.e_rbest and self.e_rbest not in qualified:
+            qualified.append(self.e_rbest)
+
+        e_rbest = None if len(qualified) == 0 else qualified[0]
+        for i in range(1, len(qualified)):
+            e_rbest = e_rbest if e_rbest.compare(qualified[i]) < 0 else qualified[i]
+
+        if e_rbest: qualified.remove(e_rbest)
+        for fmDS in self.foreignMasterList:
+            if fmDS.entry in qualified: self.foreignMasterList.remove(fmDS)
+
+        self.e_rbest = e_rbest
+
 class OrdinaryClock:
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts, interface):
+    def __init__(self, profile, clockIdentity, numberPorts, interface):
         print("[INFO] Clock ID: %s" % (clockIdentity.hex()))
         print("[EVENT] POWERUP (All Ports)")
         print("[STATE] INITIALIZING (All Ports)")
-        self.defaultDS = DefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
+        self.defaultDS = DefaultDS(profile, clockIdentity, numberPorts)
         self.currentDS = CurrentDS()
         self.parentDS = ParentDS(self.defaultDS)
         self.timePropertiesDS = TimePropertiesDS()
         self.portList = {}
+        announceInterval = 2 ** profile['portDS.logAnnounceInterval']
+        self.state_decision_event_timer = Timer(announceInterval, self.stateDecisionEvent, [])
+        self.state_decision_event_timer.start()
         for i in range(numberPorts):
-            self.portList[i+1] = Port(PTP_PROFILE, self, i + 1)
+            self.portList[i+1] = Port(profile, self, i + 1)
         self.sequenceTracker = SequenceTracker() # FIX: per port(?)
         self.skt = ptp_transport.Socket(interface)
         self.listeningTransition()
@@ -184,8 +227,10 @@ class OrdinaryClock:
     def initializeEvent(self):
         pass
 
-    def decisionEvent(self):
-        pass
+    def stateDecisionEvent(self):
+        """STATE_DECISION_EVENT 9.2.6.8"""
+        for port in self.portList.values():
+            port.calc_e_rbest()
 
     def recommendedStateEvent(self):
         pass
@@ -272,7 +317,7 @@ class OrdinaryClock:
             self.updateS1(msg)
         else:
             print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
-            self.portList[portNumber].foreignMasterList.update(msg, pDS)
+            self.portList[portNumber].updateForeignMasterList(msg)
 
 class TransparentClock:
     class Port:

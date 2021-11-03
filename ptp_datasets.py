@@ -107,40 +107,22 @@ class TransparentClockPortDS:
         self.peerMeanPathDelay = 0
 
 ## BMC Data Set
-class ForeignMasterList:
-    class ForeignMasterDS:
-        def __init__(self, msg, portDS):
-            self.foreignMasterPortIdentity = copy(msg.sourcePortIdentity)
-            self.foreignMasterAnnounceMessages = 0
-            self.timestamps = collections.deque([], 2)
-            self.entry = BMC_Entry()
-            self.update(msg, portDS)
 
-        def update(self, msg, portDS):
-            self.foreignMasterAnnounceMessages += 1
-            self.entry.parse_Announce(msg, portDS)
-            self.timestamps.append(time.monotonic())
-
-    def __init__(self):
-        self.entries = set()
-        self.e_rbest = None
+class ForeignMasterDS:
+    def __init__(self, msg, portDS):
+        self.foreignMasterPortIdentity = copy(msg.sourcePortIdentity)
+        self.foreignMasterAnnounceMessages = 0
+        self.timestamps = collections.deque([], 2)
+        self.entry = BMC_Entry()
+        self.update(msg, portDS)
 
     def update(self, msg, portDS):
-        for entry in self.entries:
-            if entry.foreignMasterPortIdentity == msg.sourcePortIdentity:
-                entry.update(msg, portDS)
-                break
-        else:
-            self.entries.add(self.ForeignMasterDS(msg, portDS))
-
-    # def getBest(self, announceInterval):
-    #     ts_threshold = time.monotonic() - (4 * announceInterval)
-    #     for entry in self.entries:
-    #         if len(entry) < 2: continue
-    #         if entry.timestamps[0] < ts_threshold: continue
-    #         if entry.msg.stepsRemoved > 255: continue
+        self.foreignMasterAnnounceMessages += 1
+        self.entry.parse_Announce(msg, portDS)
+        self.timestamps.append(time.monotonic())
 
 class BMC_Entry:
+    """Contains data and methods needed for best master clock algorithm, 9.3"""
     def __init__(self):
         self.gm_identity = None
         self.gm_priority_1 = None
@@ -154,6 +136,7 @@ class BMC_Entry:
         self.receiver_port = None
 
     def parse_DefaultDS(self, defaultDS):
+        """Use DefaultDS as information source for data set comparison algorithm, Table 12"""
         self.gm_identity = defaultDS.clockIdentity
         self.gm_priority_1 = defaultDS.grandmasterPriority1
         self.gm_priority_2 = defaultDS.grandmasterPriority2
@@ -166,6 +149,7 @@ class BMC_Entry:
         self.receiver_port = 0
 
     def parse_Announce(self, msg, portDS):
+        """Use Announce message as information source for data set comparison algorithm, Table 12"""
         self.gm_identity = msg.grandmasterIdentity
         self.gm_priority_1 = msg.grandmasterPriority1
         self.gm_priority_2 = msg.grandmasterPriority2
@@ -178,6 +162,7 @@ class BMC_Entry:
         self.receiver_port = portDS.portIdentity.portNumber
 
     def part1_data(self):
+        """Provides data for part 1 of data set comparison algorithm, Fig 27"""
         return [
             self.gm_priority_1,
             self.gm_class,
@@ -188,6 +173,7 @@ class BMC_Entry:
         ]
 
     def compare(a, b):
+        """Data set comparison algorithm from 9.3.4"""
         B_BETTER_THAN_A = 2
         B_BETTER_BY_TOPO_THAN_A = 1
         A_BETTER_THAN_B = -2
@@ -206,13 +192,16 @@ class BMC_Entry:
             if a.steps_removed > b.steps_removed:
                 if a.receiver_id < a.sender_id: return B_BETTER_THAN_A
                 if a.receiver_id > a.sender_id: return B_BETTER_BY_TOPO_THAN_A
+                print("[ERROR] Data set comparison algorithm ERROR-1")
                 return ERROR_1
             if a.steps_removed < b.steps_removed:
                 if b.receiver_id < b.sender_id: return A_BETTER_THAN_B
                 if b.receiver_id > b.sender_id: return A_BETTER_BY_TOPO_THAN_B
+                print("[ERROR] Data set comparison algorithm ERROR-1")
                 return ERROR_1
             if a.sender_id > b.sender_id: return B_BETTER_BY_TOPO_THAN_A
             if a.sender_id < b.sender_id: return A_BETTER_BY_TOPO_THAN_B
             if a.receiver_port > b.receiver_port: return B_BETTER_BY_TOPO_THAN_A
             if a.receiver_port < b.receiver_port: return A_BETTER_BY_TOPO_THAN_B
+            print("[ERROR] Data set comparison algorithm ERROR-2")
             return ERROR_2
