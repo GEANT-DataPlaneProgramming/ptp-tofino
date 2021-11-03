@@ -193,8 +193,10 @@ class OrdinaryClock:
     def announceReceiptTimeoutEvent(self, portNumber):
         print("[EVENT] ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES (Port %d)" % (portNumber))
         valid_states = (ptp.PTP_STATE.LISTENING, ptp.PTP_STATE.UNCALIBRATED, ptp.PTP_STATE.SLAVE, ptp.PTP_STATE.PASSIVE)
+        peer_ports = [self.portList[index] for index in self.portList if index != portNumber]
+
         if self.portList[portNumber].portDS.portState in valid_states:
-            if ptp.PTP_STATE.SLAVE in [port.portDS.portState for port in self.portList.values() if port.portDS.portIdentity.portNumber != portNumber]:
+            if ptp.PTP_STATE.SLAVE in [port.portDS.portState for port in peer_ports]:
                 self.updateM3(portNumber)
             else:
                 self.updateM1M2(portNumber)
@@ -270,14 +272,21 @@ class OrdinaryClock:
             self.updateS1(msg)
         else:
             print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
-            self.portList[portNumber].foreignMasterList.update(msg)
+            self.portList[portNumber].foreignMasterList.update(msg, pDS)
 
 class TransparentClock:
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
-        self.transparentClockDefaultDS = TransparentClockDefaultDS(PTP_PROFILE, clockIdentity, numberPorts)
-        self.transparentClockPortDS = {TransparentClockPortDS(PTP_PROFILE, clockIdentity, i + 1) for i in range(numberPorts)}
+    class Port:
+        def __init__(self, profile, clock, portNumber):
+            self.transparentClockPortDS = TransparentClockPortDS(profile, clock.defaultDS.clockIdentity, portNumber)
+            self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
 
-### Main
+    def __init__(self, profile, clockIdentity, numberPorts):
+        self.transparentClockDefaultDS = TransparentClockDefaultDS(profile, clockIdentity, numberPorts)
+        self.portList = {}
+        for i in range(numberPorts):
+            self.portList[i+1] = self.Port(profile, self, i + 1)
+
+### Main ###
 
 randomClockIdentity = random.randrange(2**64).to_bytes(8, 'big') # FIX: get from interface
 

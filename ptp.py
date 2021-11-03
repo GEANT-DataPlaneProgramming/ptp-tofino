@@ -2,6 +2,7 @@
 
 # pylint: disable=invalid-name
 
+from dataclasses import dataclass
 from enum import IntEnum
 import struct
 
@@ -97,14 +98,10 @@ class TimeStamp:
         self.secondsField = None # UInt48
         self.nanosecondsField = None # UInt32
 
+@dataclass(order=True)
 class PortIdentity:
-    def __init__(self):
-        self.clockIdentity = None # Octet[8]
-        self.portNumber = None # UInt16
-
-    def __eq__(self, other):
-        if not isinstance(other, PortIdentity): return NotImplemented
-        return self.clockIdentity == other.clockIdentity and self.portNumber == other.portNumber
+    clockIdentity: bytes = None # Octet[8]
+    portNumber: int  = None # UInt16
 
 class PortAddress:
     def __init__(self):

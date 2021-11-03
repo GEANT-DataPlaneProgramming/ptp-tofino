@@ -1,5 +1,7 @@
 #!/bin/python3
 
+# pylint: disable=invalid-name
+
 from copy import copy
 import collections
 import time
@@ -12,6 +14,7 @@ from ptp import *
 # TODO: Allow configured values to override PTP profile
 
 class DefaultDS:
+    # pylint: disable=too-many-instance-attributes
     def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
         # Static Members
         self.twoStepFlag = True # FIX: HW Dependant
@@ -106,50 +109,110 @@ class TransparentClockPortDS:
 ## BMC Data Set
 class ForeignMasterList:
     class ForeignMasterDS:
-        def __init__(self, msg):
+        def __init__(self, msg, portDS):
             self.foreignMasterPortIdentity = copy(msg.sourcePortIdentity)
             self.foreignMasterAnnounceMessages = 0
             self.timestamps = collections.deque([], 2)
-            self.msg = None
-            self.update(msg)
+            self.entry = BMC_Entry()
+            self.update(msg, portDS)
 
-        def update(self, msg):
+        def update(self, msg, portDS):
             self.foreignMasterAnnounceMessages += 1
-            self.msg = msg
+            self.entry.parse_Announce(msg, portDS)
             self.timestamps.append(time.monotonic())
-
-        def comparison1(self):
-            return [self.msg.grandmasterPriority1,
-                    self.msg.grandmasterClockQuality.clockClass,
-                    self.msg.grandmasterClockQuality.clockAccuracy,
-                    self.msg.grandmasterClockQuality.offsetScaledLogVariance,
-                    self.msg.grandmasterPriority2,
-                    self.msg.grandmasterIdentity]
-
-        def comparison2(self):
-            pass
 
     def __init__(self):
         self.entries = set()
         self.e_rbest = None
 
-    def update(self, msg):
+    def update(self, msg, portDS):
         for entry in self.entries:
             if entry.foreignMasterPortIdentity == msg.sourcePortIdentity:
-                entry.update(msg)
+                entry.update(msg, portDS)
                 break
         else:
-            self.entries.add(self.ForeignMasterDS(msg))
+            self.entries.add(self.ForeignMasterDS(msg, portDS))
 
-    def getBest(self, announceInterval):
-        ts_threshold = time.monotonic() - (4 * announceInterval)
-        for entry in self.entries:
-            if len(entry) < 2: continue
-            if entry.timestamps[0] < ts_threshold: continue
-            if entry.msg.stepsRemoved > 255: continue
+    # def getBest(self, announceInterval):
+    #     ts_threshold = time.monotonic() - (4 * announceInterval)
+    #     for entry in self.entries:
+    #         if len(entry) < 2: continue
+    #         if entry.timestamps[0] < ts_threshold: continue
+    #         if entry.msg.stepsRemoved > 255: continue
 
-    def getBetter(self, a, b):
-        if a == b:
-            self.getBetterByTopo(a, b)
+class BMC_Entry:
+    def __init__(self):
+        self.gm_identity = None
+        self.gm_priority_1 = None
+        self.gm_priority_2 = None
+        self.gm_class = None
+        self.gm_accuracy = None
+        self.gm_variance = None
+        self.steps_removed = None
+        self.sender_id = None
+        self.receiver_id = None
+        self.receiver_port = None
+
+    def parse_DefaultDS(self, defaultDS):
+        self.gm_identity = defaultDS.clockIdentity
+        self.gm_priority_1 = defaultDS.grandmasterPriority1
+        self.gm_priority_2 = defaultDS.grandmasterPriority2
+        self.gm_class = defaultDS.clockQuality.clockClass
+        self.gm_accuracy = defaultDS.clockQuality.clockAccuracy
+        self.gm_variance = defaultDS.clockQuality.offsetScaledLogVariance
+        self.steps_removed = 0
+        self.sender_id = PortIdentity(defaultDS.clockIdentity)
+        self.receiver_id = PortIdentity(defaultDS.clockIdentity)
+        self.receiver_port = 0
+
+    def parse_Announce(self, msg, portDS):
+        self.gm_identity = msg.grandmasterIdentity
+        self.gm_priority_1 = msg.grandmasterPriority1
+        self.gm_priority_2 = msg.grandmasterPriority2
+        self.gm_class = msg.grandmasterClockQuality.clockClass
+        self.gm_accuracy = msg.grandmasterClockQuality.clockAccuracy
+        self.gm_variance = msg.grandmasterClockQuality.offsetScaledLogVariance
+        self.steps_removed = msg.stepsRemoved
+        self.sender_id = copy(msg.sourcePortIdentity)
+        self.receiver_id = copy(portDS.portIdentity)
+        self.receiver_port = portDS.portIdentity.portNumber
+
+    def part1_data(self):
+        return [
+            self.gm_priority_1,
+            self.gm_class,
+            self.gm_accuracy,
+            self.gm_variance,
+            self.gm_priority_2,
+            self.gm_identity
+        ]
+
+    def compare(a, b):
+        B_BETTER_THAN_A = 2
+        B_BETTER_BY_TOPO_THAN_A = 1
+        A_BETTER_THAN_B = -2
+        A_BETTER_BY_TOPO_THAN_B = -1
+        ERROR_1 = 0
+        ERROR_2 = 0
+
+        if a.gm_identity != b.gm_identity:
+            if a.part1_data() > b.part1_data():
+                return B_BETTER_THAN_A
+            else:
+                return A_BETTER_THAN_B
         else:
-            pass
+            if a.steps_removed > b.steps_removed + 1: return B_BETTER_THAN_A
+            if a.steps_removed + 1 < b.steps_removed: return A_BETTER_THAN_B
+            if a.steps_removed > b.steps_removed:
+                if a.receiver_id < a.sender_id: return B_BETTER_THAN_A
+                if a.receiver_id > a.sender_id: return B_BETTER_BY_TOPO_THAN_A
+                return ERROR_1
+            if a.steps_removed < b.steps_removed:
+                if b.receiver_id < b.sender_id: return A_BETTER_THAN_B
+                if b.receiver_id > b.sender_id: return A_BETTER_BY_TOPO_THAN_B
+                return ERROR_1
+            if a.sender_id > b.sender_id: return B_BETTER_BY_TOPO_THAN_A
+            if a.sender_id < b.sender_id: return A_BETTER_BY_TOPO_THAN_B
+            if a.receiver_port > b.receiver_port: return B_BETTER_BY_TOPO_THAN_A
+            if a.receiver_port < b.receiver_port: return A_BETTER_BY_TOPO_THAN_B
+            return ERROR_2
