@@ -123,7 +123,7 @@ class ForeignMasterDS:
 
 class BMC_Entry:
     """Contains data and methods needed for best master clock algorithm, 9.3"""
-    def __init__(self):
+    def __init__(self, *args):
         self.gm_identity = None
         self.gm_priority_1 = None
         self.gm_priority_2 = None
@@ -134,12 +134,19 @@ class BMC_Entry:
         self.sender_id = None
         self.receiver_id = None
         self.receiver_port = None
+        self.msg = None
+        if len(args) == 1 and isinstance(args[0], DefaultDS):
+            self.parse_DefaultDS(*args)
+        elif len(args) == 2 and isinstance(arg[0], Announce) and isinstnace(arg[1], PortDS):
+            self.parse_Announce(*args)
+        elif len(args) != 0:
+            print ("[ERROR] Unexpected use of BMC_Entry")
 
     def parse_DefaultDS(self, defaultDS):
         """Use DefaultDS as information source for data set comparison algorithm, Table 12"""
         self.gm_identity = defaultDS.clockIdentity
-        self.gm_priority_1 = defaultDS.grandmasterPriority1
-        self.gm_priority_2 = defaultDS.grandmasterPriority2
+        self.gm_priority_1 = defaultDS.priority1
+        self.gm_priority_2 = defaultDS.priority2
         self.gm_class = defaultDS.clockQuality.clockClass
         self.gm_accuracy = defaultDS.clockQuality.clockAccuracy
         self.gm_variance = defaultDS.clockQuality.offsetScaledLogVariance
@@ -150,6 +157,7 @@ class BMC_Entry:
 
     def parse_Announce(self, msg, portDS):
         """Use Announce message as information source for data set comparison algorithm, Table 12"""
+        self.msg = msg
         self.gm_identity = msg.grandmasterIdentity
         self.gm_priority_1 = msg.grandmasterPriority1
         self.gm_priority_2 = msg.grandmasterPriority2
@@ -180,6 +188,8 @@ class BMC_Entry:
         A_BETTER_BY_TOPO_THAN_B = -1
         ERROR_1 = 0
         ERROR_2 = 0
+
+        if b is None: return A_BETTER_THAN_B
 
         if a.gm_identity != b.gm_identity:
             if a.part1_data() > b.part1_data():
