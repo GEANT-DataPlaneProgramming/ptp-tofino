@@ -46,7 +46,8 @@ class Timer:
         self.start()
         self.f(*self.args)
 
-    def start(self):
+    def start(self, interval=None):
+        if interval: self.i = interval
         self.stop()
         self.t = threading.Timer(self.i, self.run)
         self.t.start()
@@ -73,10 +74,10 @@ class Port:
         announceReceiptTimeoutInterval = self.portDS.announceReceiptTimeout * announceInterval
         announceReceiptTimeoutInterval += (announceInterval * random.random())
 
-        self.qualificationTimeoutTimer = None
+        self.qualificationTimeoutTimer = Timer(0, self.qualificationTimeoutEvent)
         self.announeTimer = Timer(announceInterval, clock.sendAnnounce, portNumber)
         self.syncTimer = Timer(syncInterval, clock.sendSync, portNumber)
-        self.announceReceiptTimeoutTimer = Timer(announceReceiptTimeoutInterval, clock.announceReceiptTimeoutEvent, portNumber)
+        self.announceReceiptTimeoutTimer = Timer(announceReceiptTimeoutInterval, self.announceReceiptTimeoutEvent)
 
     def updateForeignMasterList(self, msg):
         for fmDS in self.foreignMasterList:
@@ -113,6 +114,7 @@ class Port:
         """State Machine (9.2.5 & Fig 23) Changes based on Recommended State Event"""
         # Get next state based on recommended state
 
+        portNumber = self.portDS.portIdentity.portNumber
         state = self.portDS.portState
         self.next_state = None
 
@@ -127,64 +129,91 @@ class Port:
 
         if state in valid_states:
             if self.state_decision_code in ("M1", "M2", "M3"):
+                print("[EVENT] (%d) Recommended State = BMC_MASTER " % (portNumber))
                 if state != PTP_STATE.MASTER:
                     self.next_state = PTP_STATE.PRE_MASTER
                 else:
                     self.next_state = PTP_STATE.MASTER
             elif self.state_decision_code in ("P1", "MP2"):
+                print("[EVENT] (%d) Recommended State = BMC_PASSIVE " % (portNumber))
                 self.next_state = PTP_STATE.PASSIVE
             elif self.state_decision_code == "S1":
+                print("[EVENT] (%d) Recommended State = BMC_SLAVE " % (portNumber))
                 if state == PTP_STATE.SLAVE and not self.master_changed:
                     self.next_state = PTP_STATE.SLAVE
                 else:
                     self.next_state = PTP_STATE.UNCALIBRATED
             else:
-                print("[WARN] Invalid State Decision Code Unknwon/Unset")
+                print("[INFO] (%d) No Recommended State" % (portNumber))
         else:
-            print("[WARN] Ignoring Recommended State event due to current state")
+            print("[INFO] (%d) Ignoring Recommended State Due to Current State" % (portNumber))
+
+    def masterClockSelectedEvent(self):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[EVENT] (%d) MASTER_CLOCK_SELECTED " % (portNumber))
+        if self.portDS.portState == ptp.PTP_STATE.UNCALIBRATED:
+            self.changeState(ptp.PTP_STATE.SLAVE)
 
     def qualificationTimeoutEvent(self):
+        self.qualificationTimeoutTimer.stop()
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[EVENT] (%d) QUALIFICATION_TIMEOUT_EXPIRES " % (portNumber))
         if self.portDS.portState == ptp.PTP_STATE.PRE_MASTER:
             self.changeState(ptp.PTP_STATE.MASTER)
 
     def changeState(self, state=None):
+        portNumber = self.portDS.portIdentity.portNumber
+
         if state:
             self.next_state = state
 
-        if self.next_state == PTP_STATE.INITIALIZING:
-            pass
-        elif self.next_state == PTP_STATE.FAULTY:
-            pass
-        elif self.next_state == PTP_STATE.DISABLED:
-            pass
-        elif self.next_state == PTP_STATE.LISTENING:
-            self.portDS.portState = ptp.PTP_STATE.LISTENING
-            self.announceReceiptTimeoutTimer.start()
-        elif self.next_state == PTP_STATE.PRE_MASTER:
-            self.portDS.portState = ptp.PTP_STATE.PRE_MASTER
-            if self.state_decision_code in ("M1", "M2"):
-                self.qualificationTimeoutEvent()
-            else:
-                announceInterval = 2 ** self.portDS.logAnnounceInterval
-                n = self.clock.currentDS.stepsRemoved + 1
-                qualificationTimeoutInterval = n * announceInterval
-                self.qualificationTimeoutTimer = Timer(qualificationTimeoutInterval, self.qualificationTimeoutEvent)
-                self.qualificationTimeoutTimer.start()
-        elif self.next_state == PTP_STATE.MASTER:
+        if self.next_state != PTP_STATE.MASTER:
+            self.announeTimer.stop()
+            self.syncTimer.stop()
+
+        # 9.2.6.11
+        if self.next_state in (PTP_STATE.INITIALIZING, PTP_STATE.PRE_MASTER, PTP_STATE.FAULTY, PTP_STATE.DISABLED, PTP_STATE.MASTER):
             self.announceReceiptTimeoutTimer.stop()
-            self.portDS.portState = ptp.PTP_STATE.MASTER
+
+        # State Change
+        if self.next_state:
+            print("[STATE] (%d) New State %d" % (portNumber, self.next_state))
+            self.portDS.portState = self.next_state
+
+        # 9.2.6.11
+        if self.next_state in (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE):
+            self.announceReceiptTimeoutTimer.start()
+
+        if self.next_state == PTP_STATE.MASTER:
             self.announeTimer.run()
             self.syncTimer.run()
-        elif self.next_state == PTP_STATE.PASSIVE:
-            pass
-        elif self.next_state == PTP_STATE.UNCALIBRATED:
-            pass
-        elif self.next_state == PTP_STATE.SLAVE:
-            pass
-        else:
-            print("[WARN] Unexpected/Unknwon next state")
+
+        # 9.2.6.10
+        if self.next_state == PTP_STATE.PRE_MASTER:
+            announceInterval = 2 ** self.portDS.logAnnounceInterval
+            if self.state_decision_code in ("M1", "M2"):
+                n = 0
+            else: # Assuming State Decision Code M3
+                n = self.clock.currentDS.stepsRemoved + 1
+            qualificationTimeoutInterval = n * announceInterval
+            self.qualificationTimeoutTimer.start(qualificationTimeoutInterval)
 
         self.next_state = None
+
+    def announceReceiptTimeoutEvent(self):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[EVENT] (%d) ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES" % (portNumber))
+        valid_states = (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE)
+        peer_ports = {port for port in self.clock.portList.values() if port is not self}
+
+        if self.portDS.portState in valid_states:
+            if PTP_STATE.SLAVE in [port.portDS.portState for port in peer_ports]:
+                self.clock.updateM3(portNumber)
+            else:
+                self.clock.updateM1M2(portNumber)
+            self.changeState(PTP_STATE.MASTER)
+        else:
+            print("[WARN] UNEXPECTED CONDITION")
 
 
 class OrdinaryClock:
@@ -277,20 +306,10 @@ class OrdinaryClock:
         for port in self.portList.values():
             port.changeState(ptp.PTP_STATE.LISTENING)
 
-    def masterTransition(self, portNumber):
-        print("[STATE] (%d) MASTER" % (portNumber))
-        port = self.portList[portNumber]
-        port.announceReceiptTimeoutTimer.stop()
-        port.announeTimer.start()
-        port.syncTimer.start()
-        port.portDS.portState = ptp.PTP_STATE.MASTER
-        self.sendAnnounce(portNumber)
-        self.sendSync(portNumber)
-
     ## Updates ##
 
     def updateM1M2(self, portNumber):
-        print("[STATE] (%d) Decision code M1/M2" % (portNumber))
+        print("[INFO] Update for Decision code M1/M2")
         self.currentDS.stepsRemoved = 0
         self.currentDS.offsetFromMaster = 0
         self.currentDS.meanPathDelay = 0
@@ -311,14 +330,14 @@ class OrdinaryClock:
 
     def updateM3(self, portNumber):
         # pylint: disable=no-self-use
-        print("[STATE] (%d) Decision code M3" % (portNumber))
+        print("[INFO] Update for Decision code M3")
 
     def updateP1P2(self, portNumber):
         # pylint: disable=no-self-use
-        print("[STATE] (%d) Decision code P1/P2" % (portNumber))
+        print("[INFO] Update for Decision code P1/P2")
 
     def updateS1(self, msg):
-        print("[STATE] Decision code S1")
+        print("[INFO] Update for Decision code S1")
         master_changed = self.parentDS.parentPortIdentity != msg.sourcePortIdentity
         self.currentDS.stepsRemoved = msg.stepsRemoved + 1
         self.parentDS.parentPortIdentity = copy(msg.sourcePortIdentity)
@@ -346,6 +365,7 @@ class OrdinaryClock:
 
     def stateDecisionEvent(self):
         """STATE_DECISION_EVENT 9.2.6.8"""
+        print("[EVENT] STATE_DECISION_EVENT (All Ports)")
         # FIX: Abort if any port is in INITIALIZING state
         for port in self.portList.values():
             port.calc_e_rbest()
@@ -372,19 +392,7 @@ class OrdinaryClock:
         for port in self.portList.values():
             port.changeState()
 
-    def announceReceiptTimeoutEvent(self, portNumber):
-        print("[EVENT] ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES (Port %d)" % (portNumber))
-        valid_states = (ptp.PTP_STATE.LISTENING, ptp.PTP_STATE.UNCALIBRATED, ptp.PTP_STATE.SLAVE, ptp.PTP_STATE.PASSIVE)
-        peer_ports = [self.portList[index] for index in self.portList if index != portNumber]
 
-        if self.portList[portNumber].portDS.portState in valid_states:
-            if ptp.PTP_STATE.SLAVE in [port.portDS.portState for port in peer_ports]:
-                self.updateM3(portNumber)
-            else:
-                self.updateM1M2(portNumber)
-            self.portList[portNumber].changeState(ptp.PTP_STATE.MASTER)
-        else:
-            print("[WARN] UNEXPECTED CONDITION")
 
     def qualificationTimeoutEvent(self, port):
         pass
