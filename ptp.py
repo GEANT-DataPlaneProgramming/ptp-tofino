@@ -101,7 +101,7 @@ class TimeStamp:
 @dataclass(order=True)
 class PortIdentity:
     clockIdentity: bytes = None # Octet[8]
-    portNumber: int  = None # UInt16
+    portNumber: int = None # UInt16
 
 class PortAddress:
     def __init__(self):
@@ -274,47 +274,55 @@ class Announce(Header):
         )
         return header_bytes + Announce.parser.pack(*t)
 
-class Sync:
+class Sync(Header):
     parser = struct.Struct('!6sL')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
+        Header.__init__(self)
         self.originTimestamp = TimeStamp()
         # self.originTimestamp.secondsField = None # UInt48
         # self.originTimestamp.nanosecondsField = None # UInt32
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        Header.parse(self, buffer[:Header.parser.size])
+        t = self.parser.unpack(buffer[Header.parser.size:])
         self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
         self.originTimestamp.nanosecondsField = t[1]
 
     def bytes(self):
+        header_bytes = Header.bytes(self)
         t = (
             struct.pack('!Q', self.originTimestamp.secondsField)[2:8],
             self.originTimestamp.nanosecondsField
         )
-        return self.parser.pack(*t)
+        return header_bytes + self.parser.pack(*t)
 
 Delay_Req = Sync
 
-class Follow_Up:
+class Follow_Up(Header):
     parser = struct.Struct('!6sL')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
+        Header.__init__(self)
         self.preciseOriginTimestamp = TimeStamp()
         # self.preciseOriginTimestamp.secondsField = None # UInt48
         # self.preciseOriginTimestamp.nanosecondsField = None # UInt32
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        Header.parse(self, buffer[:Header.parser.size])
+        t = self.parser.unpack(buffer[Header.parser.size:])
         self.preciseOriginTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
         self.preciseOriginTimestamp.nanosecondsField = t[1]
 
     def bytes(self):
+        header_bytes = Header.bytes(self)
         t = (
             struct.pack('!Q', self.preciseOriginTimestamp.secondsField)[2:8],
             self.preciseOriginTimestamp.nanosecondsField
         )
-        return self.parser.pack(*t)
+        return header_bytes + self.parser.pack(*t)
 
 class Delay_Resp:
     parser = struct.Struct('!6sL8sH')

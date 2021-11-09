@@ -110,6 +110,47 @@ class Port:
 
         self.e_rbest = e_rbest
 
+    def changeState(self, state=None):
+        portNumber = self.portDS.portIdentity.portNumber
+
+        if state:
+            self.next_state = state
+
+        if self.next_state != PTP_STATE.MASTER:
+            self.announeTimer.stop()
+            self.syncTimer.stop()
+
+        # 9.2.6.11
+        if self.next_state in (PTP_STATE.INITIALIZING, PTP_STATE.PRE_MASTER, PTP_STATE.FAULTY, PTP_STATE.DISABLED, PTP_STATE.MASTER):
+            self.announceReceiptTimeoutTimer.stop()
+
+        # State Change
+        if self.next_state:
+            print("[STATE] (%d) New State %d" % (portNumber, self.next_state))
+            self.portDS.portState = self.next_state
+
+        # 9.2.6.11
+        if self.next_state in (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE):
+            self.announceReceiptTimeoutTimer.start()
+
+        if self.next_state == PTP_STATE.MASTER:
+            self.announeTimer.run()
+            self.syncTimer.run()
+
+        # 9.2.6.10
+        if self.next_state == PTP_STATE.PRE_MASTER:
+            if self.state_decision_code in ("M1", "M2"):
+                self.qualificationTimeoutEvent()
+            else: # Assuming State Decision Code M3
+                announceInterval = 2 ** self.portDS.logAnnounceInterval
+                n = self.clock.currentDS.stepsRemoved + 1
+                qualificationTimeoutInterval = n * announceInterval
+                self.qualificationTimeoutTimer.start(qualificationTimeoutInterval)
+
+        self.next_state = None
+
+    ## Events ##
+
     def recommendedStateEvent(self):
         """State Machine (9.2.5 & Fig 23) Changes based on Recommended State Event"""
         # Get next state based on recommended state
@@ -160,45 +201,6 @@ class Port:
         print("[EVENT] (%d) QUALIFICATION_TIMEOUT_EXPIRES " % (portNumber))
         if self.portDS.portState == ptp.PTP_STATE.PRE_MASTER:
             self.changeState(ptp.PTP_STATE.MASTER)
-
-    def changeState(self, state=None):
-        portNumber = self.portDS.portIdentity.portNumber
-
-        if state:
-            self.next_state = state
-
-        if self.next_state != PTP_STATE.MASTER:
-            self.announeTimer.stop()
-            self.syncTimer.stop()
-
-        # 9.2.6.11
-        if self.next_state in (PTP_STATE.INITIALIZING, PTP_STATE.PRE_MASTER, PTP_STATE.FAULTY, PTP_STATE.DISABLED, PTP_STATE.MASTER):
-            self.announceReceiptTimeoutTimer.stop()
-
-        # State Change
-        if self.next_state:
-            print("[STATE] (%d) New State %d" % (portNumber, self.next_state))
-            self.portDS.portState = self.next_state
-
-        # 9.2.6.11
-        if self.next_state in (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE):
-            self.announceReceiptTimeoutTimer.start()
-
-        if self.next_state == PTP_STATE.MASTER:
-            self.announeTimer.run()
-            self.syncTimer.run()
-
-        # 9.2.6.10
-        if self.next_state == PTP_STATE.PRE_MASTER:
-            announceInterval = 2 ** self.portDS.logAnnounceInterval
-            if self.state_decision_code in ("M1", "M2"):
-                n = 0
-            else: # Assuming State Decision Code M3
-                n = self.clock.currentDS.stepsRemoved + 1
-            qualificationTimeoutInterval = n * announceInterval
-            self.qualificationTimeoutTimer.start(qualificationTimeoutInterval)
-
-        self.next_state = None
 
     def announceReceiptTimeoutEvent(self):
         portNumber = self.portDS.portIdentity.portNumber
@@ -255,20 +257,8 @@ class OrdinaryClock:
         elif eth.type == ptp_transport.ETH_P_IPV6:
             pass # FIX: parseIPv6_UDP(), maybe recv
 
-    def recvMessage(self, buffer, metadata):
-        hdr = ptp.Header(buffer)
-        portNumber = metadata['portNumber']
-        # Check if message is from the same clock
-        if hdr.sourcePortIdentity.clockIdentity == self.defaultDS.clockIdentity:
-            if hdr.sourcePortIdentity == self.portList[portNumber].portDS.sourcePortIdentity:
-                print("[WARN] Message received by sending port (%d)" % (portNumber))
-            else:
-                print("[WARN] Message received by sending clock (%d)" % (portNumber))
-                # FIX: put all but lowest numbered port in PASSIVE state
-        else:
-            if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
-                self.recvAnnounce(ptp.Announce(buffer), portNumber)
-            # FIX: Handle other message types
+
+
     ## BMC ##
 
     def get_e_best(self):
@@ -306,7 +296,7 @@ class OrdinaryClock:
         for port in self.portList.values():
             port.changeState(ptp.PTP_STATE.LISTENING)
 
-    ## Updates ##
+    ## Data Set Updates ##
 
     def updateM1M2(self, portNumber):
         print("[INFO] Update for Decision code M1/M2")
@@ -392,11 +382,6 @@ class OrdinaryClock:
         for port in self.portList.values():
             port.changeState()
 
-
-
-    def qualificationTimeoutEvent(self, port):
-        pass
-
     def masterSelectedEvent(self, port):
         pass
 
@@ -404,6 +389,7 @@ class OrdinaryClock:
 
     def sendAnnounce(self, portNumber, destinationAddress=b''):
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
+        # TODO: ensure port is in proper state
         pDS = self.portList[portNumber].portDS
         transport = self.portList[portNumber].transport
         msg = ptp.Announce()
@@ -446,14 +432,111 @@ class OrdinaryClock:
             destinationAddress = ptp.CONST[transport]['destinationAddress']
         self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
 
-    def sendSync(self, portNumber):
-        print("[SEND] SYNC (Port %d)" % (portNumber))
-        msg = ptp.Sync()
+    def sendSync(self, portNumber, destinationAddress=b''):
+        port = self.portList[portNumber]
+        if port.portDS.portState == PTP_STATE.MASTER:
+            print("[SEND] SYNC (Port %d)" % (portNumber))
+            pDS = self.portList[portNumber].portDS
+            transport = self.portList[portNumber].transport
+            msg = ptp.Sync()
+
+            msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+            msg.messageType = ptp.PTP_MESG_TYPE.SYNC
+            msg.versionPTP = pDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + ptp.Sync.parser.size
+            msg.domainNumber = self.defaultDS.domainNumber
+            if pDS.portState == ptp.PTP_STATE.MASTER:
+                msg.flagField.alternateMasterFlag = False
+            else:
+                print("[WARN] Alternate Master not Implemented")
+            msg.flagField.twoStepFlag = self.defaultDS.twoStepFlag
+            msg.flagField.unicastFlag = destinationAddress != b''
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(pDS.portIdentity)
+            msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.SYNC, destinationAddress)
+            msg.controlField = 0x00
+            msg.logMessageInterval = pDS.logSyncInterval
+
+            msg.originTimestamp.secondsField = 0
+            msg.originTimestamp.nanosecondsField = 0
+
+            if destinationAddress == b'':
+                destinationAddress = ptp.CONST[transport]['destinationAddress']
+            self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+
+            if self.defaultDS.twoStepFlag:
+                self.initFollowUp(portNumber, destinationAddress, msg.sequenceId)
+
+    def initFollowUp(self, portNumber, destinationAddress, sequenceId):
+        # FIX: get TS7 from tofino
+        ts = time.clock_gettime_ns(time.CLOCK_REALTIME)
+        timeStamp = ptp.TimeStamp
+        timeStamp.secondsField = ts // 1000000000
+        timeStamp.nanosecondsField = ts % 1000000000
+
+        self.sendFollowUp(portNumber, destinationAddress, sequenceId, timeStamp)
+
+    def sendFollowUp(self, portNumber, destinationAddress, sequenceId, timeStamp):
+        port = self.portList[portNumber]
+        if port.portDS.portState == PTP_STATE.MASTER:
+            print("[SEND] Follow Up (Port %d)" % (portNumber))
+            pDS = self.portList[portNumber].portDS
+            transport = self.portList[portNumber].transport
+            msg = ptp.Follow_Up()
+
+            msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+            msg.messageType = ptp.PTP_MESG_TYPE.FOLLOW_UP
+            msg.versionPTP = pDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + ptp.Follow_Up.parser.size
+            msg.domainNumber = self.defaultDS.domainNumber
+            if pDS.portState == ptp.PTP_STATE.MASTER:
+                msg.flagField.alternateMasterFlag = False
+            else:
+                print("[WARN] Alternate Master not Implemented")
+            msg.flagField.unicastFlag = destinationAddress != b''
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(pDS.portIdentity)
+            msg.sequenceId = sequenceId
+            msg.controlField = 0x02
+            msg.logMessageInterval = pDS.logSyncInterval
+
+            msg.preciseOriginTimestamp = timeStamp
+
+            if destinationAddress == b'':
+                destinationAddress = ptp.CONST[transport]['destinationAddress']
+            self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
 
     ## Recv Messages ##
 
+    def recvMessage(self, buffer, metadata):
+        hdr = ptp.Header(buffer)
+        portNumber = metadata['portNumber']
+
+        if hdr.domainNumber != self.defaultDS.domainNumber:
+            print("[WARN] Ignoring inter domain PTP message")
+        elif hdr.sourcePortIdentity.clockIdentity == self.defaultDS.clockIdentity:
+            if hdr.sourcePortIdentity == self.portList[portNumber].portDS.sourcePortIdentity:
+                print("[WARN] Message received by sending port (%d)" % (portNumber))
+            else:
+                print("[WARN] Message received by sending clock (%d)" % (portNumber))
+                # FIX: put all but lowest numbered port in PASSIVE state
+        else:
+            # FIX: Handle all message types
+            if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
+                self.recvAnnounce(ptp.Announce(buffer), portNumber)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.SYNC:
+                self.recvSync(ptp.Sync(buffer), portNumber)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.FOLLOW_UP:
+                self.recvFollowUp(ptp.Follow_Up(buffer), portNumber)
+            else:
+                print("[WARN] (%d) Message Type Not Implemented: %d" % (portNumber, hdr.messageType))
+
     def recvAnnounce(self, msg, portNumber):
-        print("[RECV] Announce (Port %d)" % (portNumber))
+        print("[RECV] (%d) Announce" % (portNumber))
         pDS = self.portList[portNumber].portDS
         if pDS.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
             print("[RECV] (%d) Ignoring Announce due to state" % (portNumber))
@@ -463,6 +546,34 @@ class OrdinaryClock:
         else:
             print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
             self.portList[portNumber].updateForeignMasterList(msg)
+
+    def recvSync(self, msg, portNumber):
+        print("[RECV] (%d) Sync" % (portNumber))
+        pDS = self.portList[portNumber].portDS
+        if pDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
+            print("[RECV] (%d) Ignoring Sync due to state" % (portNumber))
+        elif pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Ignoring Sync due to state" % (portNumber))
+        elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
+            print("[RECV] (%d) Ignoring Sync from unknown master" % (portNumber))
+        else:
+            # FIX: get syncEventIngressTimestamp
+            if msg.flagField.twoStepFlag:
+                pass # wait for follow up
+            else:
+                pass # synchronize
+
+    def recvFollowUp(self, msg, portNumber):
+        print("[RECV] (%d) Follow Up" % (portNumber))
+        pDS = self.portList[portNumber].portDS
+        if pDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
+            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
+        elif pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
+        elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
+            print("[RECV] (%d) Ignoring Follow Up from unknown master" % (portNumber))
+        else:
+            pass # Look up Sync & Synchronize
 
 class TransparentClock:
     class Port:
