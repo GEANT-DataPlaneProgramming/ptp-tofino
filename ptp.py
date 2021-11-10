@@ -1,6 +1,8 @@
 #!/bin/python3
 
 # pylint: disable=invalid-name
+# pylint: disable=missing-function-docstring
+# pylint: disable=missing-class-docstring
 
 from dataclasses import dataclass
 from enum import IntEnum
@@ -97,6 +99,9 @@ class TimeStamp:
     def __init__(self):
         self.secondsField = None # UInt48
         self.nanosecondsField = None # UInt32
+
+    def ns(self):
+        return self.secondsField * 1000000000 + self.nanosecondsField
 
 @dataclass(order=True)
 class PortIdentity:
