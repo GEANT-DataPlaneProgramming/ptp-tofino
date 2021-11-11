@@ -15,7 +15,7 @@ import threading
 import random
 import time
 import ptp
-import ptp_transport
+from ptp_transport import Socket
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH
@@ -334,28 +334,9 @@ class OrdinaryClock:
         for i in range(numberPorts):
             self.portList[i+1] = Port(profile, self, i + 1)
         self.sequenceTracker = SequenceTracker() # FIX: per port(?)
-        self.skt = ptp_transport.Socket(interface)
+        self.skt = Socket(interface, self.recv_message)
         self.listeningTransition()
-        self.skt.listen(self.packetHandler) # FIX: should this be before transition
-
-    def packetHandler(self, buffer):
-        CPU_HDR_SIZE = 0
-        ETH_HDR_SIZE = 14
-
-        # cpu = tofino.CPU(buffer[:CPU_HDR_SIZE]) # FIX: implement CPU header
-        buffer = buffer[CPU_HDR_SIZE:]
-        metadata = {'portNumber': 1} # FIX: get port number from CPU header
-
-        eth = ptp_transport.Ethernet()
-        eth.parse(buffer[:ETH_HDR_SIZE])
-        buffer = buffer[ETH_HDR_SIZE:]
-
-        if eth.type == ptp_transport.ETH_P_1588:
-            self.recvMessage(buffer, metadata)
-        elif eth.type == ptp_transport.ETH_P_IP:
-            pass # FIX: parseIPv4_UDP(), maybe recv
-        elif eth.type == ptp_transport.ETH_P_IPV6:
-            pass # FIX: parseIPv6_UDP(), maybe recv
+        self.skt.listen() # FIX: should this be before transition
 
     ## BMC ##
 
@@ -485,23 +466,19 @@ class OrdinaryClock:
 
     ## Send Messages ##
 
-    def sendAnnounce(self, portNumber, destinationAddress=b''):
+    def sendAnnounce(self, portNumber):
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
         # TODO: ensure port is in proper state
         pDS = self.portList[portNumber].portDS
         transport = self.portList[portNumber].transport
         msg = ptp.Announce()
 
-        msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+        # Header fields
+        msg.transportSpecific = 0
         msg.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
         msg.versionPTP = pDS.versionNumber
         msg.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
         msg.domainNumber = self.defaultDS.domainNumber
-        if pDS.portState == ptp.PTP_STATE.MASTER:
-            msg.flagField.alternateMasterFlag = False
-        else:
-            print("[WARN] Alternate Master not Implemented")
-        msg.flagField.unicastFlag = destinationAddress != b''
         msg.flagField.profile1 = False
         msg.flagField.profile2 = False
         msg.flagField.leap61 = self.timePropertiesDS.leap61
@@ -512,10 +489,11 @@ class OrdinaryClock:
         msg.flagField.frequencyTraceable = self.timePropertiesDS.frequencyTraceable
         msg.correctionField = 0
         msg.sourcePortIdentity = copy(pDS.portIdentity)
-        msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, destinationAddress)
+        msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, b'')
         msg.controlField = 0x05
         msg.logMessageInterval = pDS.logAnnounceInterval
 
+        # Announce fields
         msg.originTimestamp.secondsField = 0 # UInt48
         msg.originTimestamp.nanosecondsField = 0 # UInt32
         msg.currentUtcOffset = self.timePropertiesDS.currentUtcOffset # Int16
@@ -526,11 +504,9 @@ class OrdinaryClock:
         msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
         msg.timeSource = self.timePropertiesDS.timeSource # Enum8
 
-        if destinationAddress == b'':
-            destinationAddress = ptp.CONST[transport]['destinationAddress']
-        self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+        self.skt.send_message(msg.bytes(), transport, portNumber)
 
-    def sendSync(self, portNumber, destinationAddress=b''):
+    def sendSync(self, portNumber):
         port = self.portList[portNumber]
         if port.portDS.portState == PTP_STATE.MASTER:
             print("[SEND] SYNC (Port %d)" % (portNumber))
@@ -538,7 +514,7 @@ class OrdinaryClock:
             transport = self.portList[portNumber].transport
             msg = ptp.Sync()
 
-            msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+            msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.SYNC
             msg.versionPTP = pDS.versionNumber
             msg.messageLength = ptp.Header.parser.size + ptp.Sync.parser.size
@@ -548,35 +524,23 @@ class OrdinaryClock:
             else:
                 print("[WARN] Alternate Master not Implemented")
             msg.flagField.twoStepFlag = self.defaultDS.twoStepFlag
-            msg.flagField.unicastFlag = destinationAddress != b''
             msg.flagField.profile1 = False
             msg.flagField.profile2 = False
             msg.correctionField = 0
             msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.SYNC, destinationAddress)
+            msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.SYNC, b'')
             msg.controlField = 0x00
             msg.logMessageInterval = pDS.logSyncInterval
 
             msg.originTimestamp.secondsField = 0
             msg.originTimestamp.nanosecondsField = 0
 
-            if destinationAddress == b'':
-                destinationAddress = ptp.CONST[transport]['destinationAddress']
-            self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+            egressTimestamp = self.skt.send_message(msg.bytes(), transport, portNumber, True)
 
             if self.defaultDS.twoStepFlag:
-                self.initFollowUp(portNumber, destinationAddress, msg.sequenceId)
+                self.send_Follow_Up(portNumber, msg.sequenceId, egressTimestamp)
 
-    def initFollowUp(self, portNumber, destinationAddress, sequenceId):
-        # FIX: get TS7 from tofino
-        ts = time.clock_gettime_ns(time.CLOCK_REALTIME)
-        timeStamp = ptp.TimeStamp()
-        timeStamp.secondsField = ts // 1000000000
-        timeStamp.nanosecondsField = ts % 1000000000
-
-        self.sendFollowUp(portNumber, destinationAddress, sequenceId, timeStamp)
-
-    def sendFollowUp(self, portNumber, destinationAddress, sequenceId, timeStamp):
+    def send_Follow_Up(self, portNumber, sequenceId, egressTimestamp):
         port = self.portList[portNumber]
         if port.portDS.portState == PTP_STATE.MASTER:
             print("[SEND] Follow Up (Port %d)" % (portNumber))
@@ -584,12 +548,12 @@ class OrdinaryClock:
             transport = self.portList[portNumber].transport
             msg = ptp.Follow_Up()
 
-            msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+            # Header fields
+            msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.FOLLOW_UP
             msg.versionPTP = pDS.versionNumber
             msg.messageLength = ptp.Header.parser.size + ptp.Follow_Up.parser.size
             msg.domainNumber = self.defaultDS.domainNumber
-            msg.flagField.unicastFlag = destinationAddress != b''
             msg.flagField.profile1 = False
             msg.flagField.profile2 = False
             msg.correctionField = 0
@@ -598,13 +562,12 @@ class OrdinaryClock:
             msg.controlField = 0x02
             msg.logMessageInterval = pDS.logSyncInterval
 
-            msg.preciseOriginTimestamp = timeStamp
+            # Follow_Up fields
+            msg.preciseOriginTimestamp = ptp.TimeStamp(egressTimestamp)
 
-            if destinationAddress == b'':
-                destinationAddress = ptp.CONST[transport]['destinationAddress']
-            self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+            self.skt.send_message(msg.bytes(), transport, portNumber)
 
-    def send_Delay_Req(self, portNumber, destinationAddress):
+    def send_Delay_Req(self, portNumber):
         """9.5.11, 11.3"""
         pDS = self.portList[portNumber].portDS
         if pDS.portState in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
@@ -613,28 +576,27 @@ class OrdinaryClock:
                 transport = self.portList[portNumber].transport
                 msg = ptp.Delay_Req()
 
-                msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+                # Header fields
+                msg.transportSpecific = 0
                 msg.messageType = ptp.PTP_MESG_TYPE.DELAY_REQ
                 msg.versionPTP = pDS.versionNumber
                 msg.messageLength = ptp.Header.parser.size + msg.parser.size
                 msg.domainNumber = self.defaultDS.domainNumber
-                msg.flagField.unicastFlag = destinationAddress != b''
                 msg.flagField.profile1 = False
                 msg.flagField.profile2 = False
                 msg.correctionField = 0
                 msg.sourcePortIdentity = copy(pDS.portIdentity)
-                msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, msg.messageType, destinationAddress)
+                msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, msg.messageType, b'')
                 msg.controlField = 0x01 # 13.3.2.10, Table 23
                 msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
                 msg.originTimestamp = ptp.TimeStamp(0)
 
+                # Felay_Req fields
                 self.synchronize.delay_req = msg
                 self.synchronize.delay_resp = None
-                self.synchronize.delayReqEgressTimestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # FIX: get from tofino
 
-                if destinationAddress == b'':
-                    destinationAddress = ptp.CONST[transport]['destinationAddress']
-                self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+                egressTimestamp = self.skt.send_message(msg.bytes(), transport, portNumber, True)
+                self.synchronize.delayReqEgressTimestamp = egressTimestamp
 
     def send_Delay_Resp(self, portNumber, delay_req, delayReqEventIngressTimestamp):
         """9.5.12, 11.3"""
@@ -644,7 +606,7 @@ class OrdinaryClock:
             transport = self.portList[portNumber].transport
             msg = ptp.Delay_Resp()
             # Header fields
-            msg.transportSpecific = ptp.CONST[transport]['transportSpecific']
+            msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.DELAY_RESP
             msg.versionPTP = pDS.versionNumber
             msg.messageLength = ptp.Header.parser.size + msg.parser.size
@@ -660,14 +622,12 @@ class OrdinaryClock:
             msg.receiveTimestamp = ptp.TimeStamp(delayReqEventIngressTimestamp)
             msg.requestingPortIdentity = delay_req.sourcePortIdentity
 
-            destinationAddress = ptp.CONST[transport]['destinationAddress']
-            self.skt.sendMessage(msg.bytes(), transport, portNumber, destinationAddress)
+            self.skt.send_message(msg.bytes(), transport, portNumber)
 
     ## Recv Messages ##
 
-    def recvMessage(self, buffer, metadata):
+    def recv_message(self, buffer, portNumber, timestamp):
         hdr = ptp.Header(buffer)
-        portNumber = metadata['portNumber']
 
         if hdr.domainNumber != self.defaultDS.domainNumber:
             print("[WARN] Ignoring inter domain PTP message")
@@ -682,11 +642,11 @@ class OrdinaryClock:
             if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
                 self.recv_Announce(ptp.Announce(buffer), portNumber)
             elif hdr.messageType == ptp.PTP_MESG_TYPE.SYNC:
-                self.recv_Sync(ptp.Sync(buffer), portNumber)
+                self.recv_Sync(ptp.Sync(buffer), portNumber, timestamp)
             elif hdr.messageType == ptp.PTP_MESG_TYPE.FOLLOW_UP:
                 self.recv_Follow_Up(ptp.Follow_Up(buffer), portNumber)
             elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_REQ:
-                self.recv_Delay_Req(ptp.Delay_Req(buffer), portNumber)
+                self.recv_Delay_Req(ptp.Delay_Req(buffer), portNumber, timestamp)
             elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_RESP:
                 self.recv_Delay_Resp(ptp.Delay_Resp(buffer), portNumber)
             else:
@@ -704,8 +664,7 @@ class OrdinaryClock:
             print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
             self.portList[portNumber].updateForeignMasterList(msg)
 
-    def recv_Sync(self, msg, portNumber):
-        ingressTimestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # FIX: get from cpu header
+    def recv_Sync(self, msg, portNumber, ingressTimestamp):
         print("[RECV] (%d) Sync" % (portNumber))
         pDS = self.portList[portNumber].portDS
         if pDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
@@ -737,18 +696,17 @@ class OrdinaryClock:
             print("[RECV] (%d) Ignoring Follow_Up from unknown master" % (portNumber))
         else:
             self.synchronize.follow_up = msg
-            if not self.synchronize.isReady(): self.send_Delay_Req(portNumber, b'') # DEBUG
+            if not self.synchronize.isReady(): self.send_Delay_Req(portNumber) # DEBUG
             self.synchronize.calcOffsetFromMaster()
 
-    def recv_Delay_Req(self, msg, portNumber):
-        delayReqEventIngressTimestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # FIX: get from cpu header
+    def recv_Delay_Req(self, msg, portNumber, ingressTimestamp):
         print("[RECV] (%d) Delay_Req" % (portNumber))
         pDS = self.portList[portNumber].portDS
         if pDS.portState != PTP_STATE.MASTER:
             print("[RECV] (%d) Ignoring Delay_Req due to state" % (portNumber))
         else:
             # TODO: send Delay_Resp
-            self.send_Delay_Resp(portNumber, msg, delayReqEventIngressTimestamp)
+            self.send_Delay_Resp(portNumber, msg, ingressTimestamp)
 
     def recv_Delay_Resp(self, msg, portNumber):
         print("[RECV] (%d) Delay_Resp" % (portNumber))

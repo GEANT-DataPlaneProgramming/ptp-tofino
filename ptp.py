@@ -52,16 +52,6 @@ class PTP_MESG_TYPE(IntEnum):
     SIGNALING = 0xC
     MANAGEMENT = 0xD
 
-CONST = {
-    PTP_PROTO.ETHERNET: {
-        'transportSpecific': 0,
-        'destinationAddress': struct.pack('!Q', 0x011b19000000)[2:8],
-        'pDelayDestinationAdress': struct.pack('!Q', 0x0180c200000e)[2:8]
-    },
-    PTP_PROTO.UDP_IPV4: {},
-    PTP_PROTO.UDP_IPV6: {}
-}
-
 ### PTP Default Profiles
 
 PTP_PROFILE_E2E = {

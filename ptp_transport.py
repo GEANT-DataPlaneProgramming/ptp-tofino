@@ -3,24 +3,36 @@
 # pylint: disable=invalid-name
 
 import struct
-import socket
-import ptp
+import tofino as driver
+from ptp import PTP_PROTO
 
-ETH_P_ALL = 3
 ETH_P_1588 = 0x88F7
 ETH_P_IP = 0x0800
 ETH_P_IPV6 = 0x86DD
 
+MULTICAST_ADDR = {
+    PTP_PROTO.ETHERNET: 0x011b19000000.to_bytes(6, 'big'),
+    PTP_PROTO.UDP_IPV4: {},
+    PTP_PROTO.UDP_IPV6: {}
+}
+
+MULTICAST_P2P_ADDR = {
+    PTP_PROTO.ETHERNET: 0x0180c200000e.to_bytes(6, 'big'),
+    PTP_PROTO.UDP_IPV4: {},
+    PTP_PROTO.UDP_IPV6: {}
+}
+
 class Ethernet:
     parser = struct.Struct('!6s6sH')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
         self.src = None
         self.dst = None
         self.type = None
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        t = self.parser.unpack(buffer[:self.parser.size])
         self.dst = t[0]
         self.src = t[1]
         self.type = t[2]
@@ -108,41 +120,39 @@ class IPv6:
         return self.parser.pack(*t)
 
 class Socket:
-    def __init__(self, skt_name):
-
-        # self.interface = interface # FIX: don't think i need this
-        # FIX: Addresses may be per port
+    def __init__(self, skt_name, callback):
+        # TODO: Set source addresses
         self.eth_addr = b'\x00' * 6
         self.ip4_addr = b'\x00' * 4
         self.ip6_addr = b'\x00' * 16
-        #self.skt = self._unix_socket(skt_name)
-        self.skt = self._packet_socket(skt_name)
+        self.skt = driver.Socket(skt_name, self.recv_message)
+        self.callback = callback
 
-    # def _unix_socket(self, path):
-    #     skt = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM, 0)
-    #     skt.bind(path)
-    #     return skt
+    def send_message(self, msg, transport, port_number, get_timestamp=False):
+        hdr = None
+        timestamp = None
 
-    def _packet_socket(self, interface):
-        skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
-        skt.bind((interface, ETH_P_ALL))
-        return skt
+        if transport == PTP_PROTO.ETHERNET:
+            hdr = self._get_ethernet_header()
 
-    def sendMessage(self, msg, transport, portNumber, destinationAddress):
-        cpu = b'' # FIX: Construct CPU Header
-        if transport == ptp.PTP_PROTO.ETHERNET:
-            self._sendEthernet(cpu, msg, destinationAddress)
+        if hdr:
+            timestamp = self.skt.send(hdr.bytes() + msg, port_number, get_timestamp)
 
-    def _sendEthernet(self, cpu, msg, destinationAddress):
+        return timestamp
+
+
+    def recv_message(self, msg, port_number, timestamp):
+        ethernet = Ethernet(msg)
+        if ethernet.type == ETH_P_1588:
+            self.callback(msg[Ethernet.parser.size:], port_number, timestamp)
+
+    def _get_ethernet_header(self):
         hdr = Ethernet()
         hdr.src = self.eth_addr
-        hdr.dst = destinationAddress
+        # TODO: select destination based on message type
+        hdr.dst = MULTICAST_ADDR[PTP_PROTO.ETHERNET]
         hdr.type = ETH_P_1588
-        self.skt.send(cpu + hdr.bytes() + msg)
+        return hdr
 
-    def listen(self, handler):
-        MAX_MSG_SIZE = 8192
-
-        while True:
-            msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
-            handler(msg)
+    def listen(self):
+        self.skt.listen()
