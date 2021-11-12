@@ -174,6 +174,13 @@ class Sync_Timer(Timer):
         await asyncio.sleep(interval)
         self._loop()
 
+class Delay_Req_Timer(Timer):
+    async def job(self):
+        self.owner.clock.send_Delay_Req(self.owner)
+        max_interval = 2 ** (self.owner.portDS.logMinDelayReqInterval + 1)
+        await asyncio.sleep(random.random() * max_interval)
+        self._loop()
+
 class State_Decision_Event_Timer(Timer):
     async def job(self):
         await asyncio.sleep(self.owner.announceInterval)
@@ -210,6 +217,7 @@ class Port:
         self.qualificationTimeoutTimer = Qualification_Timeout_Expires_Timer(self)
         self.announeTimer = Announce_Timer(self)
         self.syncTimer = Sync_Timer(self)
+        self.delay_req_timer = Delay_Req_Timer(self)
         self.announceReceiptTimeoutTimer = Announce_Receipt_Timeout_Expires_Timer(self)
 
     def updateForeignMasterList(self, msg):
@@ -337,9 +345,9 @@ class Port:
 
         if self.portDS.portState in valid_states:
             if PTP_STATE.SLAVE in [port.portDS.portState for port in peer_ports]:
-                self.clock.updateM3(portNumber)
+                self.clock.updateM3()
             else:
-                self.clock.updateM1M2(portNumber)
+                self.clock.updateM1M2()
             self.changeState(PTP_STATE.MASTER)
         else:
             print("[WARN] UNEXPECTED CONDITION")
@@ -404,7 +412,7 @@ class OrdinaryClock:
 
     ## Data Set Updates ##
 
-    def updateM1M2(self, portNumber):
+    def updateM1M2(self):
         print("[INFO] Update for Decision code M1/M2")
         self.currentDS.stepsRemoved = 0
         self.currentDS.offsetFromMaster = 0
@@ -424,11 +432,11 @@ class OrdinaryClock:
         self.timePropertiesDS.ptpTimescale = False
         self.timePropertiesDS.timeSource = ptp.PTP_TIME_SRC.INTERNAL_OSCILLATOR
 
-    def updateM3(self, portNumber):
+    def updateM3(self):
         # pylint: disable=no-self-use
         print("[INFO] Update for Decision code M3")
 
-    def updateP1P2(self, portNumber):
+    def updateP1P2(self):
         # pylint: disable=no-self-use
         print("[INFO] Update for Decision code P1/P2")
 
@@ -472,11 +480,11 @@ class OrdinaryClock:
 
         for port in self.portList.values():
             if port.state_decision_code in ("M1", "M2"):
-                self.updateM1M2(port.portDS.portIdentity.portNumber)
+                self.updateM1M2()
             elif port.state_decision_code == "M3":
-                self.updateM3(port.portDS.portIdentity.portNumber)
+                self.updateM3()
             elif port.state_decision_code in ("P1", "P2"):
-                self.updateP1P2(port.portDS.portIdentity.portNumber)
+                self.updateP1P2()
             elif port.state_decision_code == "S1":
                 port.master_changed = self.updateS1(e_best.msg)
             else:
@@ -595,13 +603,19 @@ class OrdinaryClock:
 
             self.skt.send_message(msg.bytes(), transport, portNumber)
 
-    def send_Delay_Req(self, portNumber):
+    def send_Delay_Req(self, port):
         """9.5.11, 11.3"""
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            if pDS.delayMechanism == PTP_DELAY_MECH.E2E:
+        pDS = port.portDS
+        portNumber = pDS.portIdentity.portNumber
+        transport = port.transport
+        if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            port.delay_req_timer.stop()
+        else:
+            if pDS.delayMechanism != PTP_DELAY_MECH.E2E:
+                print("[WARN] Delay Mechanism mis-match")
+                port.delay_req_timer.stop()
+            else:
                 print("[SEND] (%d) Delay_Req " % (portNumber))
-                transport = self.portList[portNumber].transport
                 msg = ptp.Delay_Req()
 
                 # Header fields
@@ -715,6 +729,7 @@ class OrdinaryClock:
             self.synchronize.follow_up = None
             # FIX: get syncEventIngressTimestamp
             if not msg.flagField.twoStepFlag:
+                self.portList[portNumber].delay_req_timer.start()
                 self.synchronize.calcOffsetFromMaster()
 
     def recv_Follow_Up(self, msg, portNumber):
@@ -731,7 +746,7 @@ class OrdinaryClock:
             print("[RECV] (%d) Ignoring Follow_Up from unknown master" % (portNumber))
         else:
             self.synchronize.follow_up = msg
-            if not self.synchronize.isReady(): self.send_Delay_Req(portNumber) # DEBUG
+            self.portList[portNumber].delay_req_timer.start()
             self.synchronize.calcOffsetFromMaster()
 
     def recv_Delay_Req(self, msg, portNumber, ingressTimestamp):
