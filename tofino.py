@@ -12,11 +12,10 @@ MAX_MSG_SIZE = 8192
 ETH_P_ALL = 3
 
 class Socket:
-    def __init__(self, skt_name, callback):
+    def __init__(self, skt_name):
         self.skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         self.skt.bind((skt_name, ETH_P_ALL))
         self.skt.setblocking(False)
-        self.callback = callback
 
     def send(self, msg, port_number, get_timestamp=False):
         # pylint: disable=unused-argument
@@ -28,10 +27,9 @@ class Socket:
 
         return timestamp
 
-    async def listen(self):
+    async def recv(self):
         loop = asyncio.get_event_loop()
-        while True:
-            msg = await loop.sock_recv(self.skt, 8192)
-            port_number = 1 # TODO: Get port number from CPU header
-            timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS1 from CPU header
-            self.callback(msg, port_number, timestamp)
+        msg = await loop.sock_recv(self.skt, MAX_MSG_SIZE)
+        port_number = 1 # TODO: Get port number from CPU header
+        timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS1 from CPU header
+        return (port_number, timestamp, msg)

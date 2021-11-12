@@ -363,9 +363,7 @@ class OrdinaryClock:
         for i in range(numberPorts):
             self.portList[i+1] = Port(profile, self, i + 1)
         self.sequenceTracker = SequenceTracker() # FIX: per port(?)
-        self.skt = Socket(interface, self.recv_message)
-        self.listeningTransition()
-        # self.skt.listen() # FIX: should this be before transition
+        self.skt = Socket(interface)
 
     ## BMC ##
 
@@ -656,6 +654,12 @@ class OrdinaryClock:
 
     ## Recv Messages ##
 
+    async def listen(self):
+        self.listeningTransition()
+        while True:
+            port_number, timestamp, msg = await self.skt.recv_message()
+            self.recv_message(msg, port_number, timestamp)
+
     def recv_message(self, buffer, portNumber, timestamp):
         hdr = ptp.Header(buffer)
 
@@ -777,7 +781,7 @@ async def main():
     parser.add_option("-i", "--interface", dest="interface", default='veth1')
     (options, _) = parser.parse_args()
 
-    c = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
-    await c.skt.listen()
+    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
+    await clock.listen()
 
 asyncio.run(main())

@@ -120,13 +120,12 @@ class IPv6:
         return self.parser.pack(*t)
 
 class Socket:
-    def __init__(self, skt_name, callback):
+    def __init__(self, skt_name):
         # TODO: Set source addresses
         self.eth_addr = b'\x00' * 6
         self.ip4_addr = b'\x00' * 4
         self.ip6_addr = b'\x00' * 16
-        self.skt = driver.Socket(skt_name, self.recv_message)
-        self.callback = callback
+        self.skt = driver.Socket(skt_name)
 
     def send_message(self, msg, transport, port_number, get_timestamp=False):
         hdr = None
@@ -141,10 +140,13 @@ class Socket:
         return timestamp
 
 
-    def recv_message(self, msg, port_number, timestamp):
+    async def recv_message(self):
+        port_number, timestamp, msg = await self.skt.recv()
         ethernet = Ethernet(msg)
         if ethernet.type == ETH_P_1588:
-            self.callback(msg[Ethernet.parser.size:], port_number, timestamp)
+            msg = msg[Ethernet.parser.size:]
+
+        return (port_number, timestamp, msg)
 
     def _get_ethernet_header(self):
         hdr = Ethernet()
@@ -153,6 +155,3 @@ class Socket:
         hdr.dst = MULTICAST_ADDR[PTP_PROTO.ETHERNET]
         hdr.type = ETH_P_1588
         return hdr
-
-    async def listen(self):
-        await self.skt.listen()
