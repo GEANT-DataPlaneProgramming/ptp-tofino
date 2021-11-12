@@ -11,14 +11,16 @@
 
 from copy import copy
 from optparse import OptionParser
-import threading
 import random
 import time
+import asyncio
 import ptp
 from ptp_transport import Socket
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH
+
+# TODO: Fix Logging
 
 ## Custom Classes ##
 
@@ -136,27 +138,64 @@ class SequenceTracker:
         return sequenceId
 
 class Timer:
-    def __init__(self, interval, function, *args):
-        self.i = interval
-        self.f = function
-        self.args = args
-        self.t = None
+    def __init__(self, owner):
+        self.task = None
+        self.owner = owner
 
-    def run(self):
-        self.start()
-        self.f(*self.args)
+    def start(self):
+        if self.task is None or self.task.done():
+            self.task = asyncio.create_task(self.job())
 
-    def start(self, interval=None):
-        if interval: self.i = interval
+    def _loop(self):
+        self.task = asyncio.create_task(self.job())
+
+    def restart(self):
         self.stop()
-        self.t = threading.Timer(self.i, self.run)
-        self.t.start()
+        self.start()
 
     def stop(self):
-        if self.t: self.t.cancel()
+        if self.task:
+            self.task.cancel()
 
-    def reset(self):
-        self.start()
+    def job(self):
+        pass
+
+class Announce_Timer(Timer):
+    async def job(self):
+        self.owner.clock.send_Announce(self.owner)
+        interval = 2 ** self.owner.portDS.logAnnounceInterval
+        await asyncio.sleep(interval)
+        self._loop()
+
+class Sync_Timer(Timer):
+    async def job(self):
+        self.owner.clock.send_Sync(self.owner)
+        interval = 2 ** self.owner.portDS.logSyncInterval
+        await asyncio.sleep(interval)
+        self._loop()
+
+class State_Decision_Event_Timer(Timer):
+    async def job(self):
+        await asyncio.sleep(self.owner.announceInterval)
+        self.owner.stateDecisionEvent()
+        self._loop()
+
+class Qualification_Timeout_Expires_Timer(Timer):
+    async def job(self):
+        n = self.owner.clock.currentDS.stepsRemoved + 1 if self.owner.state_decision_code == "M3" else 0
+        announceInterval = 2 ** self.owner.portDS.logAnnounceInterval
+        n = self.owner.clock.currentDS.stepsRemoved + 1
+        qualificationTimeoutInterval = n * announceInterval
+        await asyncio.sleep(qualificationTimeoutInterval)
+        self.owner.qualificationTimeoutEvent()
+
+class Announce_Receipt_Timeout_Expires_Timer(Timer):
+    async def job(self):
+        announceInterval = 2 ** self.owner.portDS.logAnnounceInterval
+        announceReceiptTimeoutInterval = self.owner.portDS.announceReceiptTimeout * announceInterval
+        announceReceiptTimeoutInterval += (announceInterval * random.random())
+        await asyncio.sleep(announceReceiptTimeoutInterval)
+        self.owner.announceReceiptTimeoutEvent()
 
 class Port:
     def __init__(self, profile, clock, portNumber):
@@ -168,16 +207,10 @@ class Port:
         self.e_rbest = None
         self.foreignMasterList = set()
         self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
-
-        announceInterval = 2 ** self.portDS.logAnnounceInterval
-        syncInterval = 2 ** self.portDS.logSyncInterval
-        announceReceiptTimeoutInterval = self.portDS.announceReceiptTimeout * announceInterval
-        announceReceiptTimeoutInterval += (announceInterval * random.random())
-
-        self.qualificationTimeoutTimer = Timer(0, self.qualificationTimeoutEvent)
-        self.announeTimer = Timer(announceInterval, clock.sendAnnounce, portNumber)
-        self.syncTimer = Timer(syncInterval, clock.sendSync, portNumber)
-        self.announceReceiptTimeoutTimer = Timer(announceReceiptTimeoutInterval, self.announceReceiptTimeoutEvent)
+        self.qualificationTimeoutTimer = Qualification_Timeout_Expires_Timer(self)
+        self.announeTimer = Announce_Timer(self)
+        self.syncTimer = Sync_Timer(self)
+        self.announceReceiptTimeoutTimer = Announce_Receipt_Timeout_Expires_Timer(self)
 
     def updateForeignMasterList(self, msg):
         for fmDS in self.foreignMasterList:
@@ -234,18 +267,12 @@ class Port:
             self.announceReceiptTimeoutTimer.start()
 
         if self.next_state == PTP_STATE.MASTER:
-            self.announeTimer.run()
-            self.syncTimer.run()
+            self.announeTimer.start()
+            self.syncTimer.start()
 
         # 9.2.6.10
         if self.next_state == PTP_STATE.PRE_MASTER:
-            if self.state_decision_code in ("M1", "M2"):
-                self.qualificationTimeoutEvent()
-            else: # Assuming State Decision Code M3
-                announceInterval = 2 ** self.portDS.logAnnounceInterval
-                n = self.clock.currentDS.stepsRemoved + 1
-                qualificationTimeoutInterval = n * announceInterval
-                self.qualificationTimeoutTimer.start(qualificationTimeoutInterval)
+            self.qualificationTimeoutTimer.start()
 
         self.next_state = None
 
@@ -328,15 +355,17 @@ class OrdinaryClock:
         self.timePropertiesDS = TimePropertiesDS()
         self.portList = {}
         self.synchronize = Synchronize()
-        announceInterval = 2 ** profile['portDS.logAnnounceInterval']
-        self.state_decision_event_timer = Timer(announceInterval, self.stateDecisionEvent)
+        # The logAnnounceInterval could be different per-port, but the standard treats it as being
+        # the same throughout a domain. The default value is stored here for convience.
+        self.announceInterval = 2 ** profile['portDS.logAnnounceInterval']
+        self.state_decision_event_timer = State_Decision_Event_Timer(self)
         self.state_decision_event_timer.start()
         for i in range(numberPorts):
             self.portList[i+1] = Port(profile, self, i + 1)
         self.sequenceTracker = SequenceTracker() # FIX: per port(?)
         self.skt = Socket(interface, self.recv_message)
         self.listeningTransition()
-        self.skt.listen() # FIX: should this be before transition
+        # self.skt.listen() # FIX: should this be before transition
 
     ## BMC ##
 
@@ -466,11 +495,13 @@ class OrdinaryClock:
 
     ## Send Messages ##
 
-    def sendAnnounce(self, portNumber):
-        print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
+    def send_Announce(self, port):
+
         # TODO: ensure port is in proper state
-        pDS = self.portList[portNumber].portDS
-        transport = self.portList[portNumber].transport
+        pDS = port.portDS
+        portNumber = pDS.portIdentity.portNumber
+        transport = port.transport
+        print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
         msg = ptp.Announce()
 
         # Header fields
@@ -506,14 +537,13 @@ class OrdinaryClock:
 
         self.skt.send_message(msg.bytes(), transport, portNumber)
 
-    def sendSync(self, portNumber):
-        port = self.portList[portNumber]
-        if port.portDS.portState == PTP_STATE.MASTER:
+    def send_Sync(self, port):
+        pDS = port.portDS
+        portNumber = pDS.portIdentity.portNumber
+        transport = port.transport
+        if pDS.portState == PTP_STATE.MASTER:
             print("[SEND] SYNC (Port %d)" % (portNumber))
-            pDS = self.portList[portNumber].portDS
-            transport = self.portList[portNumber].transport
             msg = ptp.Sync()
-
             msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.SYNC
             msg.versionPTP = pDS.versionNumber
@@ -655,6 +685,7 @@ class OrdinaryClock:
     def recv_Announce(self, msg, portNumber):
         print("[RECV] (%d) Announce" % (portNumber))
         pDS = self.portList[portNumber].portDS
+        self.portList[portNumber].announceReceiptTimeoutTimer.restart()
         if pDS.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
             print("[RECV] (%d) Ignoring Announce due to state" % (portNumber))
         elif pDS.portState == ptp.PTP_STATE.SLAVE and self.parentDS.parentPortIdentity == msg.sourcePortIdentity:
@@ -737,14 +768,16 @@ class TransparentClock:
 
 ### Main ###
 
-randomClockIdentity = random.randrange(2**64).to_bytes(8, 'big') # FIX: get from interface
+async def main():
+    randomClockIdentity = random.randrange(2**64).to_bytes(8, 'big') # FIX: get from interface
+    parser = OptionParser()
+    # FIX: Add option for providing clockIdentity (as MAC and/or IPv6?)
+    # parser.add_option("-d", "--identity", action="callback", type="string", callback=formatIdentity, default=randomClockIdentity)
+    parser.add_option("-n", "--ports", type="int", dest="numberPorts", default=1)
+    parser.add_option("-i", "--interface", dest="interface", default='veth1')
+    (options, _) = parser.parse_args()
 
-parser = OptionParser()
-# FIX: Add option for providing clockIdentity (as MAC and/or IPv6?)
-# parser.add_option("-d", "--identity", action="callback", type="string", callback=formatIdentity, default=randomClockIdentity)
-parser.add_option("-n", "--ports", type="int", dest="numberPorts", default=1)
-parser.add_option("-i", "--interface", dest="interface", default='veth1')
+    c = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
+    await c.skt.listen()
 
-(options, _) = parser.parse_args()
-
-c = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
+asyncio.run(main())

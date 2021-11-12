@@ -154,5 +154,5 @@ class Socket:
         hdr.type = ETH_P_1588
         return hdr
 
-    def listen(self):
-        self.skt.listen()
+    async def listen(self):
+        await self.skt.listen()

@@ -6,6 +6,7 @@
 
 import socket
 import time
+import asyncio
 
 MAX_MSG_SIZE = 8192
 ETH_P_ALL = 3
@@ -14,6 +15,7 @@ class Socket:
     def __init__(self, skt_name, callback):
         self.skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         self.skt.bind((skt_name, ETH_P_ALL))
+        self.skt.setblocking(False)
         self.callback = callback
 
     def send(self, msg, port_number, get_timestamp=False):
@@ -26,9 +28,10 @@ class Socket:
 
         return timestamp
 
-    def listen(self):
+    async def listen(self):
+        loop = asyncio.get_event_loop()
         while True:
-            msg, *_ = self.skt.recvmsg(MAX_MSG_SIZE)
+            msg = await loop.sock_recv(self.skt, 8192)
             port_number = 1 # TODO: Get port number from CPU header
             timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS1 from CPU header
             self.callback(msg, port_number, timestamp)
