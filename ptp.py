@@ -18,11 +18,6 @@ class PTP_TIME_SRC(IntEnum):
     OTHER = 0x90
     INTERNAL_OSCILLATOR = 0xA0
 
-class PTP_PROTO(IntEnum):
-    UDP_IPV4 = 1
-    UDP_IPV6 = 2
-    ETHERNET = 3
-
 class PTP_STATE(IntEnum):
     INITIALIZING = 1
     FAULTY = 2

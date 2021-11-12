@@ -2,25 +2,41 @@
 
 # pylint: disable=invalid-name
 
+# TODO: Implement IPv4/6 UDP transports
+
 import struct
+from enum import IntEnum
 import tofino as driver
-from ptp import PTP_PROTO
 
 ETH_P_1588 = 0x88F7
 ETH_P_IP = 0x0800
 ETH_P_IPV6 = 0x86DD
 
-MULTICAST_ADDR = {
-    PTP_PROTO.ETHERNET: 0x011b19000000.to_bytes(6, 'big'),
-    PTP_PROTO.UDP_IPV4: {},
-    PTP_PROTO.UDP_IPV6: {}
-}
+IANA_PORT_PTP_EVENT = 319
+IANA_PORT_PTP_GENERAL = 320
 
-MULTICAST_P2P_ADDR = {
-    PTP_PROTO.ETHERNET: 0x0180c200000e.to_bytes(6, 'big'),
-    PTP_PROTO.UDP_IPV4: {},
-    PTP_PROTO.UDP_IPV6: {}
-}
+IPV4_PTP_PRIMARY = "224.0.1.129"
+IPV4_PTP_PDELAY = "224.0.0.107"
+
+IPV6_PTP_PRIMARY= "FF0X:0:0:0:0:0:0:181" # TODO: configure IPv6 multicast scope (X)
+IPV6_PTP_PDELAY = "FF02:0:0:0:0:0:0:6B"
+
+ETH_DST_PTP_PRIMARY = 0x011b19000000.to_bytes(6, 'big')
+ETH_DST_PTP_PDELAY = 0x0180c200000e.to_bytes(6, 'big')
+
+class PTP_PROTO(IntEnum):
+    UDP_IPV4 = 1
+    UDP_IPV6 = 2
+    ETHERNET = 3
+
+class Port_Config:
+    def __init__(self):
+        # TODO: Retrieve correct values from (?)
+        self.proto = PTP_PROTO.ETHERNET
+        self.src_mac = 0x000000000000.to_bytes(6, 'big')
+        self.src_ipv4 = b'\x00' * 4
+        self.src_ipv6 = b'\x00' * 16
+        self.src_port = 0
 
 class Ethernet:
     parser = struct.Struct('!6s6sH')
@@ -119,26 +135,31 @@ class IPv6:
         )
         return self.parser.pack(*t)
 
-class Socket:
-    def __init__(self, skt_name):
-        # TODO: Set source addresses
-        self.eth_addr = b'\x00' * 6
-        self.ip4_addr = b'\x00' * 4
-        self.ip6_addr = b'\x00' * 16
+class Transport:
+    def __init__(self, skt_name, number_ports):
         self.skt = driver.Socket(skt_name)
+        self.port_config = {}
 
-    def send_message(self, msg, transport, port_number, get_timestamp=False):
-        hdr = None
+        for i in range(1, number_ports + 1):
+            self.port_config[i] = Port_Config()
+
+    def send_message(self, msg, port_number, get_timestamp=False):
         timestamp = None
 
-        if transport == PTP_PROTO.ETHERNET:
-            hdr = self._get_ethernet_header()
+        hdr = Ethernet()
+        hdr.src = self.port_config[port_number].src_mac
+
+        if self.port_config[port_number].proto == PTP_PROTO.ETHERNET:
+            msg.transportSpecific = 0
+            hdr.dst = ETH_DST_PTP_PRIMARY # TODO: select destination based on message type
+            hdr.type = ETH_P_1588
+        else:
+            print("[ERROR] Protocol not Implemented")
 
         if hdr:
-            timestamp = self.skt.send(hdr.bytes() + msg, port_number, get_timestamp)
+            timestamp = self.skt.send(hdr.bytes() + msg.bytes(), port_number, get_timestamp)
 
         return timestamp
-
 
     async def recv_message(self):
         port_number, timestamp, msg = await self.skt.recv()
@@ -147,11 +168,3 @@ class Socket:
             msg = msg[Ethernet.parser.size:]
 
         return (port_number, timestamp, msg)
-
-    def _get_ethernet_header(self):
-        hdr = Ethernet()
-        hdr.src = self.eth_addr
-        # TODO: select destination based on message type
-        hdr.dst = MULTICAST_ADDR[PTP_PROTO.ETHERNET]
-        hdr.type = ETH_P_1588
-        return hdr

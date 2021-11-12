@@ -15,7 +15,7 @@ import random
 import time
 import asyncio
 import ptp
-from ptp_transport import Socket
+from ptp_transport import Transport
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH
@@ -213,7 +213,6 @@ class Port:
         self.portDS = PortDS(profile, clock.defaultDS.clockIdentity, portNumber)
         self.e_rbest = None
         self.foreignMasterList = set()
-        self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
         self.qualificationTimeoutTimer = Qualification_Timeout_Expires_Timer(self)
         self.announeTimer = Announce_Timer(self)
         self.syncTimer = Sync_Timer(self)
@@ -371,7 +370,7 @@ class OrdinaryClock:
         for i in range(numberPorts):
             self.portList[i+1] = Port(profile, self, i + 1)
         self.sequenceTracker = SequenceTracker() # FIX: per port(?)
-        self.skt = Socket(interface)
+        self.transport = Transport(interface, numberPorts)
 
     ## BMC ##
 
@@ -506,7 +505,6 @@ class OrdinaryClock:
         # TODO: ensure port is in proper state
         pDS = port.portDS
         portNumber = pDS.portIdentity.portNumber
-        transport = port.transport
         print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
         msg = ptp.Announce()
 
@@ -541,12 +539,11 @@ class OrdinaryClock:
         msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
         msg.timeSource = self.timePropertiesDS.timeSource # Enum8
 
-        self.skt.send_message(msg.bytes(), transport, portNumber)
+        self.transport.send_message(msg, portNumber)
 
     def send_Sync(self, port):
         pDS = port.portDS
         portNumber = pDS.portIdentity.portNumber
-        transport = port.transport
         if pDS.portState == PTP_STATE.MASTER:
             print("[SEND] SYNC (Port %d)" % (portNumber))
             msg = ptp.Sync()
@@ -571,7 +568,7 @@ class OrdinaryClock:
             msg.originTimestamp.secondsField = 0
             msg.originTimestamp.nanosecondsField = 0
 
-            egressTimestamp = self.skt.send_message(msg.bytes(), transport, portNumber, True)
+            egressTimestamp = self.transport.send_message(msg, portNumber, True)
 
             if self.defaultDS.twoStepFlag:
                 self.send_Follow_Up(portNumber, msg.sequenceId, egressTimestamp)
@@ -581,11 +578,9 @@ class OrdinaryClock:
         if port.portDS.portState == PTP_STATE.MASTER:
             print("[SEND] Follow Up (Port %d)" % (portNumber))
             pDS = self.portList[portNumber].portDS
-            transport = self.portList[portNumber].transport
             msg = ptp.Follow_Up()
 
             # Header fields
-            msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.FOLLOW_UP
             msg.versionPTP = pDS.versionNumber
             msg.messageLength = ptp.Header.parser.size + ptp.Follow_Up.parser.size
@@ -601,13 +596,12 @@ class OrdinaryClock:
             # Follow_Up fields
             msg.preciseOriginTimestamp = ptp.TimeStamp(egressTimestamp)
 
-            self.skt.send_message(msg.bytes(), transport, portNumber)
+            self.transport.send_message(msg, portNumber)
 
     def send_Delay_Req(self, port):
         """9.5.11, 11.3"""
         pDS = port.portDS
         portNumber = pDS.portIdentity.portNumber
-        transport = port.transport
         if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
             port.delay_req_timer.stop()
         else:
@@ -619,7 +613,6 @@ class OrdinaryClock:
                 msg = ptp.Delay_Req()
 
                 # Header fields
-                msg.transportSpecific = 0
                 msg.messageType = ptp.PTP_MESG_TYPE.DELAY_REQ
                 msg.versionPTP = pDS.versionNumber
                 msg.messageLength = ptp.Header.parser.size + msg.parser.size
@@ -637,7 +630,7 @@ class OrdinaryClock:
                 self.synchronize.delay_req = msg
                 self.synchronize.delay_resp = None
 
-                egressTimestamp = self.skt.send_message(msg.bytes(), transport, portNumber, True)
+                egressTimestamp = self.transport.send_message(msg, portNumber, True)
                 self.synchronize.delayReqEgressTimestamp = egressTimestamp
 
     def send_Delay_Resp(self, portNumber, delay_req, delayReqEventIngressTimestamp):
@@ -645,10 +638,8 @@ class OrdinaryClock:
         pDS = self.portList[portNumber].portDS
         if pDS.portState == PTP_STATE.MASTER and pDS.delayMechanism == PTP_DELAY_MECH.E2E:
             print("[SEND] (%d) Delay_Resp " % (portNumber))
-            transport = self.portList[portNumber].transport
             msg = ptp.Delay_Resp()
             # Header fields
-            msg.transportSpecific = 0
             msg.messageType = ptp.PTP_MESG_TYPE.DELAY_RESP
             msg.versionPTP = pDS.versionNumber
             msg.messageLength = ptp.Header.parser.size + msg.parser.size
@@ -664,17 +655,17 @@ class OrdinaryClock:
             msg.receiveTimestamp = ptp.TimeStamp(delayReqEventIngressTimestamp)
             msg.requestingPortIdentity = delay_req.sourcePortIdentity
 
-            self.skt.send_message(msg.bytes(), transport, portNumber)
+            self.transport.send_message(msg, portNumber)
 
     ## Recv Messages ##
 
     async def listen(self):
         self.listeningTransition()
         while True:
-            port_number, timestamp, msg = await self.skt.recv_message()
-            self.recv_message(msg, port_number, timestamp)
+            port_number, timestamp, msg = await self.transport.recv_message()
+            self.process_message(msg, port_number, timestamp)
 
-    def recv_message(self, buffer, portNumber, timestamp):
+    def process_message(self, buffer, portNumber, timestamp):
         hdr = ptp.Header(buffer)
 
         if hdr.domainNumber != self.defaultDS.domainNumber:
@@ -777,7 +768,6 @@ class TransparentClock:
     class Port:
         def __init__(self, profile, clock, portNumber):
             self.transparentClockPortDS = TransparentClockPortDS(profile, clock.defaultDS.clockIdentity, portNumber)
-            self.transport = ptp.PTP_PROTO.ETHERNET # FIX: make configurable
 
     def __init__(self, profile, clockIdentity, numberPorts):
         self.transparentClockDefaultDS = TransparentClockDefaultDS(profile, clockIdentity, numberPorts)

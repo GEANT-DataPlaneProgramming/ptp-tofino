@@ -11,6 +11,12 @@ import asyncio
 MAX_MSG_SIZE = 8192
 ETH_P_ALL = 3
 
+class Port_Porperties:
+    def __init__(self):
+        self.ptp_port_number = None
+        self.tofino_d_p = None
+        self.tofino_port = (None, None)
+
 class Socket:
     def __init__(self, skt_name):
         self.skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
