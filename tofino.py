@@ -10,24 +10,49 @@ import asyncio
 
 MAX_MSG_SIZE = 8192
 ETH_P_ALL = 3
+CPU_HDR_SIZE = 8
 
-class Port_Porperties:
-    def __init__(self):
-        self.ptp_port_number = None
-        self.tofino_d_p = None
-        self.tofino_port = (None, None)
+class CPU_Header:
+    def __init__(self, buffer=b''):
+        self.device_port = None
+        self.timestamp = None
+        if buffer: self.parse(buffer)
+
+    def parse(self, buffer):
+        self.device_port = int.from_bytes(buffer[:2], 'big') & 0x001F
+        self.timestamp = int.from_bytes(buffer[2:8], 'big')
+
+    def bytes(self):
+        bytes = b''
+        bytes += self.device_port.to_bytes(2, 'big')
+        bytes += self.timestamp.to_bytes(6, 'big')
+        return bytes
 
 class Socket:
-    def __init__(self, skt_name):
+    def __init__(self, skt_name, port_list):
+        self.ports = {1:1}
         self.skt = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         self.skt.bind((skt_name, ETH_P_ALL))
         self.skt.setblocking(False)
+        self.number_of_ports = 1
+        self.map_ports(port_list)
+
+    def map_ports(self, filename):
+        if filename:
+            f = open(filename)
+            lines = f.readlines()
+            for i in range(len(lines)):
+                self.ports[i + 1] = int(lines[i])
+            f.close()
+            self.number_of_ports = len(lines)
 
     def send(self, msg, port_number, get_timestamp=False):
-        # pylint: disable=unused-argument
         timestamp = None
-        # TODO: Create CPU header and append to message
-        self.skt.send(msg)
+        cpu_hdr = CPU_Header()
+        cpu_hdr.device_port = self.ports[port_number]
+        cpu_hdr.timestamp = get_timestamp # Request Egress Timestamp
+
+        self.skt.send(cpu_hdr.bytes() + msg)
         if get_timestamp:
             timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS7 from tofino
 
@@ -36,6 +61,10 @@ class Socket:
     async def recv(self):
         loop = asyncio.get_event_loop()
         msg = await loop.sock_recv(self.skt, MAX_MSG_SIZE)
-        port_number = 1 # TODO: Get port number from CPU header
+        cpu_hdr = CPU_Header(msg)
+        port_list = [port for (port, d_p) in self.ports.items() if d_p == cpu_hdr.device_port]
         timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS1 from CPU header
-        return (port_number, timestamp, msg)
+        if len(port_list) == 1:
+            return (port_list[0], timestamp, msg[CPU_HDR_SIZE:])
+        else:
+            return await self.recv()

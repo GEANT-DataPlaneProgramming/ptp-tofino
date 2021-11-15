@@ -136,11 +136,11 @@ class IPv6:
         return self.parser.pack(*t)
 
 class Transport:
-    def __init__(self, skt_name, number_ports):
-        self.skt = driver.Socket(skt_name)
+    def __init__(self, skt_name, port_list):
+        self.skt = driver.Socket(skt_name, port_list)
         self.port_config = {}
-
-        for i in range(1, number_ports + 1):
+        self.number_of_ports = self.skt.number_of_ports
+        for i in range(1, self.number_of_ports + 1):
             self.port_config[i] = Port_Config()
 
     def send_message(self, msg, port_number, get_timestamp=False):
@@ -163,8 +163,9 @@ class Transport:
 
     async def recv_message(self):
         port_number, timestamp, msg = await self.skt.recv()
-        ethernet = Ethernet(msg)
-        if ethernet.type == ETH_P_1588:
-            msg = msg[Ethernet.parser.size:]
+        if msg:
+            ethernet = Ethernet(msg)
+            if ethernet.type == ETH_P_1588:
+                msg = msg[Ethernet.parser.size:]
 
         return (port_number, timestamp, msg)

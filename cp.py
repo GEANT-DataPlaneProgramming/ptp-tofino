@@ -352,25 +352,25 @@ class Port:
             print("[WARN] UNEXPECTED CONDITION")
 
 class OrdinaryClock:
-    def __init__(self, profile, clockIdentity, numberPorts, interface):
+    def __init__(self, profile, clockIdentity, interface, port_list):
         print("[INFO] Clock ID: %s" % (clockIdentity.hex()))
         print("[EVENT] POWERUP (All Ports)")
         print("[STATE] INITIALIZING (All Ports)")
-        self.defaultDS = DefaultDS(profile, clockIdentity, numberPorts)
+        self.transport = Transport(interface, port_list)
+        self.defaultDS = DefaultDS(profile, clockIdentity, self.transport.number_of_ports)
         self.currentDS = CurrentDS()
         self.parentDS = ParentDS(self.defaultDS)
         self.timePropertiesDS = TimePropertiesDS()
         self.portList = {}
+        for i in range(self.transport.number_of_ports):
+            self.portList[i+1] = Port(profile, self, i + 1)
         self.synchronize = Synchronize()
+        self.sequenceTracker = SequenceTracker() # FIX: per port(?)
         # The logAnnounceInterval could be different per-port, but the standard treats it as being
         # the same throughout a domain. The default value is stored here for convience.
         self.announceInterval = 2 ** profile['portDS.logAnnounceInterval']
         self.state_decision_event_timer = State_Decision_Event_Timer(self)
         self.state_decision_event_timer.start()
-        for i in range(numberPorts):
-            self.portList[i+1] = Port(profile, self, i + 1)
-        self.sequenceTracker = SequenceTracker() # FIX: per port(?)
-        self.transport = Transport(interface, numberPorts)
 
     ## BMC ##
 
@@ -663,7 +663,7 @@ class OrdinaryClock:
         self.listeningTransition()
         while True:
             port_number, timestamp, msg = await self.transport.recv_message()
-            self.process_message(msg, port_number, timestamp)
+            if msg: self.process_message(msg, port_number, timestamp)
 
     def process_message(self, buffer, portNumber, timestamp):
         hdr = ptp.Header(buffer)
@@ -730,8 +730,9 @@ class OrdinaryClock:
             print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
         elif pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
             print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
-        elif msg.sourcePortIdentity != self.synchronize.sync.sourcePortIdentity \
-            or msg.sequenceId != self.synchronize.sync.sequenceId:
+        elif self.synchronize.sync is None or \
+            msg.sourcePortIdentity != self.synchronize.sync.sourcePortIdentity or \
+            msg.sequenceId != self.synchronize.sync.sequenceId:
             print("[RECV] (%d) Ignoring Unexpected Follow_Up" % (portNumber))
         elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
             print("[RECV] (%d) Ignoring Follow_Up from unknown master" % (portNumber))
@@ -782,11 +783,13 @@ async def main():
     parser = OptionParser()
     # FIX: Add option for providing clockIdentity (as MAC and/or IPv6?)
     # parser.add_option("-d", "--identity", action="callback", type="string", callback=formatIdentity, default=randomClockIdentity)
-    parser.add_option("-n", "--ports", type="int", dest="numberPorts", default=1)
+    # parser.add_option("-n", "--ports", type="int", dest="numberPorts", default=1)
     parser.add_option("-i", "--interface", dest="interface", default='veth1')
+    parser.add_option("-p", "--port_list", dest="port_list")
+
     (options, _) = parser.parse_args()
 
-    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.numberPorts, options.interface)
+    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.interface, options.port_list)
     await clock.listen()
 
 asyncio.run(main())
