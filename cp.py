@@ -1,4 +1,4 @@
-#!/bin/python3
+#!/usr/bin/env python3
 
 # pylint: disable=invalid-name
 # pylint: disable=missing-function-docstring
@@ -82,7 +82,7 @@ class Synchronize:
             offsetFromMaster -= self.sync.correctionField / 2**16
 
         self.offsetFromMaster = offsetFromMaster
-        print("[INFO] Offset From Master: %d" % (offsetFromMaster))
+        print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
 
 
     def calcMeanPathDelay(self):
@@ -122,7 +122,7 @@ class Synchronize:
                 meanPathDelay = ((t4 - t1) - pdelay_resp_correctionField) / 2
 
         self.meanPathDelay = meanPathDelay
-        print("[INFO] Mean Path Delay: %d" % (meanPathDelay))
+        print("[INFO] Mean Path Delay: %0.2f" % (meanPathDelay))
 
 # Impements Section 7.3.7
 class SequenceTracker:

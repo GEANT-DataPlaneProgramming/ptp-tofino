@@ -1,4 +1,4 @@
-#!/bin/python3
+#!/usr/bin/env python3
 
 # pylint: disable=invalid-name
 
@@ -157,6 +157,8 @@ class Transport:
             print("[ERROR] Protocol not Implemented")
 
         if hdr:
+            # msg_length = hdr.parser.size + msg.parser.size
+            # pad = b'\x00' * (128 - msg_length) if msg_length < 128 else b''
             timestamp = self.skt.send(hdr.bytes() + msg.bytes(), port_number, get_timestamp)
 
         return timestamp

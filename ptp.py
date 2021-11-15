@@ -235,7 +235,7 @@ class Announce(Header):
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
-        t = Announce.parser.unpack(buffer[Header.parser.size:])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])
         self.originTimestamp.nanosecondsField = t[1]
         self.currentUtcOffset = t[2]
@@ -277,7 +277,7 @@ class Sync(Header):
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
-        t = self.parser.unpack(buffer[Header.parser.size:])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.originTimestamp.nanosecondsField = t[1]
 
@@ -303,7 +303,7 @@ class Follow_Up(Header):
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
-        t = self.parser.unpack(buffer[Header.parser.size:])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.preciseOriginTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.preciseOriginTimestamp.nanosecondsField = t[1]
 
@@ -330,7 +330,7 @@ class Delay_Resp(Header):
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
-        t = self.parser.unpack(buffer[Header.parser.size:])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.receiveTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.receiveTimestamp.nanosecondsField = t[1]
         self.requestingPortIdentity.clockIdentity = t[2]
@@ -357,7 +357,7 @@ class Pdelay_Req(Header):
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
-        t = self.parser.unpack(buffer[Header.parser.size:])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.originTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.originTimestamp.nanosecondsField = t[1]
 
