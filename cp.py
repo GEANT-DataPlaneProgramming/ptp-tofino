@@ -14,11 +14,14 @@ from optparse import OptionParser
 import random
 import time
 import asyncio
+import os
 import ptp
 from ptp_transport import Transport
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH
+
+DEBUG = None
 
 # TODO: Fix Logging
 
@@ -83,7 +86,15 @@ class Synchronize:
 
         self.offsetFromMaster = offsetFromMaster
         print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
+        self.logValuesTwoStep()
 
+    def logValuesTwoStep(self):
+        """Log Delay request-response measurement values"""
+        t1 = self.follow_up.preciseOriginTimestamp.ns()
+        t2 = self.syncEventIngressTimestamp
+        t3 = self.delayReqEgressTimestamp
+        t4 = self.delay_resp.receiveTimestamp.ns()
+        print(t1, t2, t3, t4, self.meanPathDelay, self.offsetFromMaster, sep=',', flush=True, file=DEBUG)
 
     def calcMeanPathDelay(self):
         if not self.isReady(): return # Debug
@@ -229,7 +240,7 @@ class Port:
 
     def calc_e_rbest(self):
         # FIX: Remove master from foreignMasterList(?)
-        print("[BMC] (%d) Calculating E rbest" % (self.portDS.portIdentity.portNumber))
+        # print("[BMC] (%d) Calculating E rbest" % (self.portDS.portIdentity.portNumber))
         announceInterval = 2 ** self.portDS.logAnnounceInterval
         ts_threshold = time.monotonic() - (4 * announceInterval)
         qualified = [
@@ -251,35 +262,36 @@ class Port:
         self.e_rbest = e_rbest
 
     def changeState(self, state=None):
-        portNumber = self.portDS.portIdentity.portNumber
-
         if state:
             self.next_state = state
 
-        if self.next_state != PTP_STATE.MASTER:
-            self.announeTimer.stop()
-            self.syncTimer.stop()
+        if self.portDS.portState != self.next_state:
+            portNumber = self.portDS.portIdentity.portNumber
 
-        # 9.2.6.11
-        if self.next_state in (PTP_STATE.INITIALIZING, PTP_STATE.PRE_MASTER, PTP_STATE.FAULTY, PTP_STATE.DISABLED, PTP_STATE.MASTER):
-            self.announceReceiptTimeoutTimer.stop()
+            if self.next_state != PTP_STATE.MASTER:
+                self.announeTimer.stop()
+                self.syncTimer.stop()
 
-        # State Change
-        if self.next_state:
-            print("[STATE] (%d) New State %d" % (portNumber, self.next_state))
-            self.portDS.portState = self.next_state
+            # 9.2.6.11
+            if self.next_state in (PTP_STATE.INITIALIZING, PTP_STATE.PRE_MASTER, PTP_STATE.FAULTY, PTP_STATE.DISABLED, PTP_STATE.MASTER):
+                self.announceReceiptTimeoutTimer.stop()
 
-        # 9.2.6.11
-        if self.next_state in (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE):
-            self.announceReceiptTimeoutTimer.start()
+            # State Change
+            if self.next_state:
+                print("[STATE] (%d) %s -> %s" % (portNumber, self.portDS.portState.name, self.next_state.name))
+                self.portDS.portState = self.next_state
 
-        if self.next_state == PTP_STATE.MASTER:
-            self.announeTimer.start()
-            self.syncTimer.start()
+            # 9.2.6.11
+            if self.next_state in (PTP_STATE.LISTENING, PTP_STATE.UNCALIBRATED, PTP_STATE.SLAVE, PTP_STATE.PASSIVE):
+                self.announceReceiptTimeoutTimer.start()
 
-        # 9.2.6.10
-        if self.next_state == PTP_STATE.PRE_MASTER:
-            self.qualificationTimeoutTimer.start()
+            if self.next_state == PTP_STATE.MASTER:
+                self.announeTimer.start()
+                self.syncTimer.start()
+
+            # 9.2.6.10
+            if self.next_state == PTP_STATE.PRE_MASTER:
+                self.qualificationTimeoutTimer.start()
 
         self.next_state = None
 
@@ -304,22 +316,20 @@ class Port:
 
         if state in valid_states:
             if self.state_decision_code in ("M1", "M2", "M3"):
-                print("[EVENT] (%d) Recommended State = BMC_MASTER " % (portNumber))
+                print("[EVENT] (%d) Recommended State = BMC_MASTER (%s)" % (portNumber, self.state_decision_code))
                 if state != PTP_STATE.MASTER:
                     self.next_state = PTP_STATE.PRE_MASTER
                 else:
                     self.next_state = PTP_STATE.MASTER
-            elif self.state_decision_code in ("P1", "MP2"):
-                print("[EVENT] (%d) Recommended State = BMC_PASSIVE " % (portNumber))
+            elif self.state_decision_code in ("P1", "P2"):
+                print("[EVENT] (%d) Recommended State = BMC_PASSIVE (%s)" % (portNumber, self.state_decision_code))
                 self.next_state = PTP_STATE.PASSIVE
             elif self.state_decision_code == "S1":
-                print("[EVENT] (%d) Recommended State = BMC_SLAVE " % (portNumber))
+                print("[EVENT] (%d) Recommended State = BMC_SLAVE (%s)" % (portNumber, self.state_decision_code))
                 if state == PTP_STATE.SLAVE and not self.master_changed:
                     self.next_state = PTP_STATE.SLAVE
                 else:
                     self.next_state = PTP_STATE.UNCALIBRATED
-            else:
-                print("[INFO] (%d) No Recommended State" % (portNumber))
         else:
             print("[INFO] (%d) Ignoring Recommended State Due to Current State" % (portNumber))
 
@@ -352,11 +362,11 @@ class Port:
             print("[WARN] UNEXPECTED CONDITION")
 
 class OrdinaryClock:
-    def __init__(self, profile, clockIdentity, interface, port_list):
+    def __init__(self, profile, clockIdentity, interface, driver_name, driver_config):
         print("[INFO] Clock ID: %s" % (clockIdentity.hex()))
-        print("[EVENT] POWERUP (All Ports)")
-        print("[STATE] INITIALIZING (All Ports)")
-        self.transport = Transport(interface, port_list)
+        print("[EVENT] (*) POWERUP")
+        print("[STATE] (*) INITIALIZING")
+        self.transport = Transport(interface, driver_name, driver_config)
         self.defaultDS = DefaultDS(profile, clockIdentity, self.transport.number_of_ports)
         self.currentDS = CurrentDS()
         self.parentDS = ParentDS(self.defaultDS)
@@ -386,7 +396,8 @@ class OrdinaryClock:
         d0 = BMC_Entry(self.defaultDS)
 
         if port.e_rbest is None and port.portDS.portState == ptp.PTP_STATE.LISTENING:
-            return None # Remain in LISTENING state
+            print("[STATE] (%d) Remain in LISTENING" % (port.portDS.portIdentity.portNumber))
+            return None
         elif self.defaultDS.clockQuality.clockClass < 128:
             if d0.compare(port.e_rbest) < 0:
                 return "M1"
@@ -402,17 +413,9 @@ class OrdinaryClock:
             if e_best.compare(port.e_rbest) == -2: print("[WARN] Possible issue with SDA")
             return "M3"
 
-    ## Transitions ##
-
-    def listeningTransition(self):
-        print("[STATE] LISTENING (All Ports)")
-        for port in self.portList.values():
-            port.changeState(ptp.PTP_STATE.LISTENING)
-
     ## Data Set Updates ##
 
     def updateM1M2(self):
-        print("[INFO] Update for Decision code M1/M2")
         self.currentDS.stepsRemoved = 0
         self.currentDS.offsetFromMaster = 0
         self.currentDS.meanPathDelay = 0
@@ -433,14 +436,13 @@ class OrdinaryClock:
 
     def updateM3(self):
         # pylint: disable=no-self-use
-        print("[INFO] Update for Decision code M3")
+        pass
 
     def updateP1P2(self):
         # pylint: disable=no-self-use
-        print("[INFO] Update for Decision code P1/P2")
+        pass
 
     def updateS1(self, msg):
-        print("[INFO] Update for Decision code S1")
         master_changed = self.parentDS.parentPortIdentity != msg.sourcePortIdentity
         self.currentDS.stepsRemoved = msg.stepsRemoved + 1
         self.parentDS.parentPortIdentity = copy(msg.sourcePortIdentity)
@@ -468,7 +470,7 @@ class OrdinaryClock:
 
     def stateDecisionEvent(self):
         """STATE_DECISION_EVENT 9.2.6.8"""
-        print("[EVENT] STATE_DECISION_EVENT (All Ports)")
+        print("[EVENT] (*) STATE_DECISION_EVENT")
         # FIX: Abort if any port is in INITIALIZING state
         for port in self.portList.values():
             port.calc_e_rbest()
@@ -486,8 +488,6 @@ class OrdinaryClock:
                 self.updateP1P2()
             elif port.state_decision_code == "S1":
                 port.master_changed = self.updateS1(e_best.msg)
-            else:
-                print("[WARN] (%d) No Update Performed" % (port.portDS.portIdentity.portNumber))
 
         for port in self.portList.values():
             port.recommendedStateEvent()
@@ -660,7 +660,9 @@ class OrdinaryClock:
     ## Recv Messages ##
 
     async def listen(self):
-        self.listeningTransition()
+        for port in self.portList.values():
+            port.changeState(ptp.PTP_STATE.LISTENING)
+
         while True:
             port_number, timestamp, msg = await self.transport.recv_message()
             if msg: self.process_message(msg, port_number, timestamp)
@@ -692,33 +694,30 @@ class OrdinaryClock:
                 print("[WARN] (%d) Message Type Not Implemented: %d" % (portNumber, hdr.messageType))
 
     def recv_Announce(self, msg, portNumber):
-        print("[RECV] (%d) Announce" % (portNumber))
         pDS = self.portList[portNumber].portDS
         self.portList[portNumber].announceReceiptTimeoutTimer.restart()
         if pDS.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
-            print("[RECV] (%d) Ignoring Announce due to state" % (portNumber))
+            print("[RECV] (%d) Announce Ignored (%s)" % (portNumber, pDS.portState.name))
         elif pDS.portState == ptp.PTP_STATE.SLAVE and self.parentDS.parentPortIdentity == msg.sourcePortIdentity:
-            print("[RECV] (%d) Received Announce from Master" % (portNumber))
+            print("[RECV] (%d) Announce Received from Master" % (portNumber))
             self.updateS1(msg)
         else:
-            print("[RECV] (%d) Updating ForeignMasterList" % (portNumber))
+            print("[RECV] (%d) Announce Received Foreign Master" % (portNumber))
             self.portList[portNumber].updateForeignMasterList(msg)
 
     def recv_Sync(self, msg, portNumber, ingressTimestamp):
-        print("[RECV] (%d) Sync" % (portNumber))
         pDS = self.portList[portNumber].portDS
-        if pDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
-            print("[RECV] (%d) Ignoring Sync due to state" % (portNumber))
-        elif pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            print("[RECV] (%d) Ignoring Sync due to state" % (portNumber))
+        if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Sync Ignored (%s)" % (portNumber, pDS.portState.name))
         elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
-            print("[RECV] (%d) Ignoring Sync from unknown master" % (portNumber))
+            print("[RECV] (%d) Sync Ignored (Not Parent)" % (portNumber))
         else:
+            print("[RECV] (%d) Sync Received" % (portNumber))
             self.synchronize.delayMechanism = pDS.delayMechanism
             self.synchronize.sync = msg
             self.synchronize.syncEventIngressTimestamp = ingressTimestamp
             self.synchronize.follow_up = None
-            # FIX: get syncEventIngressTimestamp
+            # TODO: get syncEventIngressTimestamp
             if not msg.flagField.twoStepFlag:
                 self.portList[portNumber].delay_req_timer.start()
                 self.synchronize.calcOffsetFromMaster()
@@ -779,17 +778,23 @@ class TransparentClock:
 ### Main ###
 
 async def main():
+    global DEBUG
     randomClockIdentity = random.randrange(2**64).to_bytes(8, 'big') # FIX: get from interface
     parser = OptionParser()
     # FIX: Add option for providing clockIdentity (as MAC and/or IPv6?)
     # parser.add_option("-d", "--identity", action="callback", type="string", callback=formatIdentity, default=randomClockIdentity)
     # parser.add_option("-n", "--ports", type="int", dest="numberPorts", default=1)
     parser.add_option("-i", "--interface", dest="interface", default='veth1')
-    parser.add_option("-p", "--port_list", dest="port_list")
+    parser.add_option("-d", "--driver", dest="driver", default='dummy')
+    parser.add_option("-c", "--driver-config", dest="driver_config")
 
     (options, _) = parser.parse_args()
-
-    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.interface, options.port_list)
+    pid = os.getpid()
+    print("[INFO] PID: %d" % (pid))
+    debug_filename = 'debug_%d.log' % (pid)
+    DEBUG = open(debug_filename, mode='w')
+    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.interface, options.driver, options.driver_config)
     await clock.listen()
+    DEBUG.close()
 
 asyncio.run(main())

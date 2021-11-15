@@ -6,7 +6,8 @@
 
 import struct
 from enum import IntEnum
-import tofino as driver
+# import tofino
+# import system
 
 ETH_P_1588 = 0x88F7
 ETH_P_IP = 0x0800
@@ -136,12 +137,22 @@ class IPv6:
         return self.parser.pack(*t)
 
 class Transport:
-    def __init__(self, skt_name, port_list):
+    def __init__(self, skt_name, driver_name, port_list):
+        driver = self.load_driver(driver_name)
         self.skt = driver.Socket(skt_name, port_list)
         self.port_config = {}
         self.number_of_ports = self.skt.number_of_ports
         for i in range(1, self.number_of_ports + 1):
             self.port_config[i] = Port_Config()
+
+    def load_driver(self, driver_name):
+        if driver_name == 'tofino':
+            import tofino as driver
+        elif driver_name == 'dummy':
+            import dummy as driver
+        else:
+            print("[ERROR] Unable to locate driver: %s" % (driver_name))
+        return driver
 
     def send_message(self, msg, port_number, get_timestamp=False):
         timestamp = None
