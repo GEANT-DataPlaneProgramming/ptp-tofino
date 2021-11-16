@@ -71,6 +71,7 @@ class Synchronize:
 
     def calcOffsetFromMaster(self):
         if not self.isReady(): return # Debug
+        self.calcMeanPathDelay()
         syncEventIngressTimestamp = self.syncEventIngressTimestamp
         meanPathDelay = self.meanPathDelay
 
@@ -97,7 +98,6 @@ class Synchronize:
         print(t1, t2, t3, t4, self.meanPathDelay, self.offsetFromMaster, sep=',', flush=True, file=DEBUG)
 
     def calcMeanPathDelay(self):
-        if not self.isReady(): return # Debug
         if self.delayMechanism == PTP_DELAY_MECH.E2E:
             t2 = self.syncEventIngressTimestamp
             t3 = self.delayReqEgressTimestamp
@@ -133,7 +133,6 @@ class Synchronize:
                 meanPathDelay = ((t4 - t1) - pdelay_resp_correctionField) / 2
 
         self.meanPathDelay = meanPathDelay
-        print("[INFO] Mean Path Delay: %0.2f" % (meanPathDelay))
 
 # Impements Section 7.3.7
 class SequenceTracker:
@@ -761,7 +760,7 @@ class OrdinaryClock:
             print("[RECV] (%d) Ignoring Delay_Resp from non-Master" % (portNumber))
         else:
             self.synchronize.delay_resp = msg
-            self.synchronize.calcMeanPathDelay()
+            # self.synchronize.calcMeanPathDelay()
             pDS.logMinDelayReqInterval = msg.logMessageInterval
 
 class TransparentClock:
