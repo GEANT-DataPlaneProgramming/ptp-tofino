@@ -21,9 +21,8 @@ from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortD
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH
 
-DEBUG = None
-
 # TODO: Fix Logging
+# TODO: Enable logging of timestamp values through config
 
 ## Custom Classes ##
 
@@ -87,7 +86,7 @@ class Synchronize:
 
         self.offsetFromMaster = offsetFromMaster
         print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
-        self.logValuesTwoStep()
+        # self.logValuesTwoStep()
 
     def logValuesTwoStep(self):
         """Log Delay request-response measurement values"""
@@ -95,7 +94,7 @@ class Synchronize:
         t2 = self.syncEventIngressTimestamp
         t3 = self.delayReqEgressTimestamp
         t4 = self.delay_resp.receiveTimestamp.ns()
-        print(t1, t2, t3, t4, self.meanPathDelay, self.offsetFromMaster, sep=',', flush=True, file=DEBUG)
+        # print(t1, t2, t3, t4, self.meanPathDelay, self.offsetFromMaster, sep=',', flush=True, file=DEBUG)
 
     def calcMeanPathDelay(self):
         if self.delayMechanism == PTP_DELAY_MECH.E2E:
@@ -777,7 +776,6 @@ class TransparentClock:
 ### Main ###
 
 async def main():
-    global DEBUG
     randomClockIdentity = random.randrange(2**64).to_bytes(8, 'big') # FIX: get from interface
     parser = OptionParser()
     # FIX: Add option for providing clockIdentity (as MAC and/or IPv6?)
@@ -790,10 +788,7 @@ async def main():
     (options, _) = parser.parse_args()
     pid = os.getpid()
     print("[INFO] PID: %d" % (pid))
-    debug_filename = 'debug_%d.log' % (pid)
-    DEBUG = open(debug_filename, mode='w')
     clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.interface, options.driver, options.driver_config)
     await clock.listen()
-    DEBUG.close()
 
 asyncio.run(main())
