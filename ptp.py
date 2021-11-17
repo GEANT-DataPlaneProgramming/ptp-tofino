@@ -185,7 +185,7 @@ class Header:
     def parse(self, buffer):
         t = Header.parser.unpack(buffer[:Header.parser.size])
         self.transportSpecific = t[0] >> 4
-        self.messageType = t[0] & 0x0F
+        self.messageType = PTP_MESG_TYPE(t[0] & 0x0F)
         self.versionPTP = t[1] & 0x0F
         self.messageLength = t[2]
         self.domainNumber = t[3]

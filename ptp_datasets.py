@@ -35,8 +35,8 @@ class CurrentDS:
     def __init__(self):
         # All members are Dynamic
         self.stepsRemoved = 0
-        self.offsetFromMaster = 0 # Implementation-specific (ns * 2^16)
-        self.meanPathDelay = 0 # Implementation-specific (ns * 2^16)
+        self.offsetFromMaster = 0 # Implementation-specific (ns * 2^16) # NOTE: using ns float instead
+        self.meanPathDelay = 0 # Implementation-specific (ns * 2^16) # NOTE: using ns float instead
 
 class ParentDS:
     def __init__(self, defaultDS):

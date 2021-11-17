@@ -19,114 +19,12 @@ import ptp
 from ptp_transport import Transport
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
 from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
-from ptp import PTP_STATE, PTP_DELAY_MECH
+from ptp import PTP_STATE, PTP_DELAY_MECH, PTP_MESG_TYPE
 
 # TODO: Fix Logging
 # TODO: Enable logging of timestamp values through config
 
 ## Custom Classes ##
-
-class Synchronize:
-    def __init__(self):
-        self.delayMechanism = None
-
-        self.sync = None
-        self.sync_its = None
-        self.sync_ets = None
-        self.follow_up = None
-
-        # E2E
-        self.delay_req = None
-        self.delay_req_ets = None
-        self.delay_req_its = None
-        self.delay_resp = None
-
-        # P2P
-        self.pdelay_req = None
-        self.pdelay_req_ets = None # t1
-        self.pdelay_req_its = None # t2
-        self.pdelay_resp = None
-        self.pdelay_resp_ets = None # t3
-        self.pdelay_resp_its = None # t4
-        self.pdelay_resp_follow_up = None
-
-        self.meanPathDelay = None
-        self.offsetFromMaster = None
-
-    def calcOffsetFromMaster(self):
-        if self.delayMechanism == PTP_DELAY_MECH.E2E:
-            self.calcMeanPathDelay()
-
-        if self.meanPathDelay is not None:
-            offsetFromMaster = self.sync_its - self.sync_ets - self.meanPathDelay
-            offsetFromMaster -= self.sync.correctionField / 2**16
-            offsetFromMaster -= self.sync.correctionField / 2**16
-            if self.sync.flagField.twoStepFlag:
-                offsetFromMaster -= self.follow_up.correctionField / 2**16
-
-            self.offsetFromMaster = offsetFromMaster
-            print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
-        # self.logValuesTwoStep()
-
-    # def logValuesTwoStep(self):
-    #     """Log Delay request-response measurement values"""
-    #     t1 = self.follow_up.preciseOriginTimestamp.ns()
-    #     t2 = self.syncEventIngressTimestamp
-    #     t3 = self.delayReqEgressTimestamp
-    #     t4 = self.delay_resp.receiveTimestamp.ns()
-    #     print(t1, t2, t3, t4, self.meanPathDelay, self.offsetFromMaster, sep=',', flush=True, file=DEBUG)
-
-    def calcMeanPathDelay(self):
-        meanPathDelay = None
-
-        if self.delayMechanism == PTP_DELAY_MECH.E2E:
-            if self.sync and (self.follow_up or not self.sync.flagField.twoStepFlag) and self.delay_resp:
-                t2 = self.sync_its
-                t3 = self.delay_req_ets
-
-                meanPathDelay = (t2 - t3) + (self.delay_req_its - self.sync_ets)
-                meanPathDelay -= self.sync.correctionField / 2**16
-                if self.sync.flagField.twoStepFlag:
-                    meanPathDelay -= self.follow_up.correctionField / 2**16
-                meanPathDelay -= self.delay_resp.correctionField / 2**16
-                meanPathDelay /= 2
-            else:
-                print("[WARN] E2E Delay Mechanism Not Ready")
-                return False
-        elif self.delayMechanism == PTP_DELAY_MECH.P2P:
-            if self.pdelay_resp and (not self.pdelay_resp.flagField.twoStepFlag or self.pdelay_resp_follow_up):
-                t1 = self.pdelay_req_ets
-                t4 = self.pdelay_resp_its
-
-                if self.pdelay_resp.flagField.twoStepFlag:
-                    meanPathDelay = (t4 - t1) - (self.pdelay_resp_ets - self.pdelay_req_its)
-                    meanPathDelay -= self.pdelay_resp.correctionField / 2**16
-                    meanPathDelay -= self.pdelay_resp_follow_up.correctionField / 2**16
-                    meanPathDelay /= 2
-                else:
-                    pdelay_resp_correctionField = self.pdelay_resp.correctionField / 2**16
-                    meanPathDelay = ((t4 - t1) - pdelay_resp_correctionField) / 2
-            else:
-                print("[WARN] P2P Delay Mechanism Not Ready")
-                return False
-        else:
-            raise NotImplementedError("Unkown Delay Mechanism: %s" % self.delayMechanism)
-
-        self.meanPathDelay = meanPathDelay
-        return True
-
-# Impements Section 7.3.7
-class SequenceTracker:
-    def __init__(self):
-        self.sequenceId = {}
-
-    def getSequenceId(self, portNumber, messageType, destination):
-        key = (portNumber, messageType, destination)
-        if key not in self.sequenceId:
-            self.sequenceId[key] = 0
-        sequenceId = self.sequenceId[key]
-        self.sequenceId[key] = (sequenceId + 1) & 0xFFFF
-        return sequenceId
 
 class Timer:
     def __init__(self, owner):
@@ -153,28 +51,28 @@ class Timer:
 
 class Announce_Timer(Timer):
     async def job(self):
-        self.owner.clock.send_Announce(self.owner)
+        self.owner.send_Announce()
         interval = 2 ** self.owner.portDS.logAnnounceInterval
         await asyncio.sleep(interval)
         self._loop()
 
 class Sync_Timer(Timer):
     async def job(self):
-        self.owner.clock.send_Sync(self.owner)
+        self.owner.send_Sync()
         interval = 2 ** self.owner.portDS.logSyncInterval
         await asyncio.sleep(interval)
         self._loop()
 
 class Delay_Req_Timer(Timer):
     async def job(self):
-        self.owner.clock.send_Delay_Req(self.owner)
+        self.owner.send_Delay_Req()
         max_interval = 2 ** (self.owner.portDS.logMinDelayReqInterval + 1)
         await asyncio.sleep(random.random() * max_interval)
         self._loop()
 
 class Pdelay_Req_Timer(Timer):
     async def job(self):
-        self.owner.clock.send_Pdelay_Req(self.owner)
+        self.owner.send_Pdelay_Req()
         interval = 2 ** self.owner.portDS.logMinPdelayReqInterval
         await asyncio.sleep(interval)
         self._loop()
@@ -202,21 +100,117 @@ class Announce_Receipt_Timeout_Expires_Timer(Timer):
         await asyncio.sleep(announceReceiptTimeoutInterval)
         self.owner.announceReceiptTimeoutEvent()
 
+class Sync_Data:
+    def __init__(self, sync, sync_ingress_timestamp):
+        self.sync = sync
+        self.syncEventIngressTimestamp = sync_ingress_timestamp
+        self.follow_up = None
+
+    def calcOffsetFromMaster(self, meanPathDelay):
+        offsetFromMaster = None
+
+        if meanPathDelay is not None:
+            if not self.sync.flagField.twoStepFlag:
+                offsetFromMaster = self.syncEventIngressTimestamp - self.sync.originTimestamp.ns()
+                offsetFromMaster -= meanPathDelay
+                offsetFromMaster -= self.sync.correctionField / 2**16
+            else:
+                offsetFromMaster = self.syncEventIngressTimestamp - self.follow_up.preciseOriginTimestamp.ns()
+                offsetFromMaster -= meanPathDelay
+                offsetFromMaster -= self.sync.correctionField / 2**16
+                offsetFromMaster -= self.follow_up.correctionField / 2**16
+
+        print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
+        return offsetFromMaster
+
+
+class Delay:
+    def __init__(self, delay_req, delay_req_egress_timestamp):
+        self.req = delay_req
+        self.t3 = delay_req_egress_timestamp
+        self.resp = None
+
+    def calcMeanPathDelay(self, sync_data):
+        sync = sync_data.sync
+        t2 = sync_data.syncEventIngressTimestamp
+        follow_up = sync_data.follow_up
+        meanPathDelay = None
+
+        if sync and (not sync.flagField.twoStepFlag or follow_up) and self.resp:
+            if not sync.flagField.twoStepFlag:
+                meanPathDelay = t2 - self.t3
+                meanPathDelay += self.resp.receiveTimestamp.ns() - sync.originTimestamp.ns()
+                meanPathDelay -= sync.correctionField / 2**16
+                meanPathDelay -= self.resp.correctionField / 2**16
+            else:
+                meanPathDelay = t2 - self.t3
+                meanPathDelay += self.resp.receiveTimestamp.ns() - follow_up.preciseOriginTimestamp.ns()
+                meanPathDelay -= sync.correctionField / 2**16
+                meanPathDelay -= follow_up.correctionField / 2**16
+                meanPathDelay -= self.resp.correctionField / 2**16
+                meanPathDelay /= 2
+        else:
+            print("[WARN] E2E mean path delay calculation not ready")
+
+        return meanPathDelay
+
+class Pdelay:
+    def __init__(self, pdelay_req, pdelay_req_egress_timestamp):
+        self.req = pdelay_req
+        self.t1 = pdelay_req_egress_timestamp
+        self.resp = None
+        self.t4 = None
+        self.resp_follow_up = None
+
+    def calcMeanPathDelay(self):
+        meanPathDelay = None
+
+        if self.resp and (not self.resp.flagField.twoStepFlag or self.resp_follow_up):
+            if self.resp.flagField.twoStepFlag:
+                meanPathDelay = self.t4 - self.t1
+                meanPathDelay -= self.resp_follow_up.responseOriginTimestamp.ns() - self.resp.requestReceiptTimestamp.ns()
+                meanPathDelay -= self.resp.correctionField / 2**16
+                meanPathDelay -= self.resp_follow_up.correctionField / 2**16
+                meanPathDelay /= 2
+            else:
+                meanPathDelay = ((self.t4 - self.t1) - self.resp.correctionField) / 2
+        else:
+            print("[WARN] P2P mean path delay calculation not ready")
+
+        return meanPathDelay
+
 class Port:
     def __init__(self, profile, clock, portNumber):
         self.clock = clock
         self.state_decision_code = None
         self.master_changed = False
         self.next_state = None
+        self.sequenceId = {}
+
+        ## Synchronization
+        self.sync_data = None
+        self.delay = None
+        self.pdelay = None
+
+        ## PTP Specified ##
         self.portDS = PortDS(profile, clock.defaultDS.clockIdentity, portNumber)
         self.e_rbest = None
         self.foreignMasterList = set()
+
+        ## Timers ##
         self.qualificationTimeoutTimer = Qualification_Timeout_Expires_Timer(self)
         self.announeTimer = Announce_Timer(self)
         self.syncTimer = Sync_Timer(self)
         self.delay_req_timer = Delay_Req_Timer(self)
         self.pdelay_req_timer = Pdelay_Req_Timer(self)
         self.announceReceiptTimeoutTimer = Announce_Receipt_Timeout_Expires_Timer(self)
+
+    def getSequenceId(self, message_type):
+        if message_type not in self.sequenceId:
+            self.sequenceId[message_type] = 0
+        sequenceId = self.sequenceId[message_type]
+        self.sequenceId[message_type] = (sequenceId + 1) % 0x10000
+        return sequenceId
 
     def updateForeignMasterList(self, msg):
         for fmDS in self.foreignMasterList:
@@ -291,6 +285,21 @@ class Port:
 
         self.next_state = None
 
+    def synchronize(self):
+        offsetFromMaster = None
+
+        if self.portDS.delayMechanism == PTP_DELAY_MECH.E2E:
+            meanPathDelay = self.delay.calcMeanPathDelay(self.sync_data)
+            if meanPathDelay is not None:
+                offsetFromMaster = self.sync_data.calcOffsetFromMaster(meanPathDelay)
+                self.clock.currentDS.meanPathDelay = meanPathDelay
+        elif self.portDS.delayMechanism == PTP_DELAY_MECH.P2P:
+            if self.portDS.peerMeanPathDelay:
+                offsetFromMaster = self.sync_data.calcOffsetFromMaster(self.portDS.peerMeanPathDelay)
+
+        if offsetFromMaster is not None:
+            self.clock.currentDS.offsetFromMaster = offsetFromMaster
+
     ## Events ##
 
     def recommendedStateEvent(self):
@@ -357,6 +366,357 @@ class Port:
         else:
             print("[WARN] UNEXPECTED CONDITION")
 
+    ## Send Messages ##
+    def send_message(self, msg, get_timestamp=False):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[SEND] (%d) %s" % (portNumber, msg.messageType.name))
+        egress_timestamp = self.clock.transport.send_message(msg, portNumber, get_timestamp)
+        return egress_timestamp
+
+    def send_Announce(self):
+        if self.portDS.portState == PTP_STATE.MASTER:
+            msg = ptp.Announce()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = self.clock.defaultDS.domainNumber
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.flagField.leap61 = self.clock.timePropertiesDS.leap61
+            msg.flagField.leap59 = self.clock.timePropertiesDS.leap59
+            msg.flagField.currentUtcOffsetValid = self.clock.timePropertiesDS.currentUtcOffsetValid
+            msg.flagField.ptpTimescale = self.clock.timePropertiesDS.ptpTimescale
+            msg.flagField.timeTraceable = self.clock.timePropertiesDS.timeTraceable
+            msg.flagField.frequencyTraceable = self.clock.timePropertiesDS.frequencyTraceable
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = self.getSequenceId(PTP_MESG_TYPE.ANNOUNCE)
+            msg.controlField = 0x05
+            msg.logMessageInterval = self.portDS.logAnnounceInterval
+
+            # Announce fields
+            msg.originTimestamp.secondsField = 0 # UInt48
+            msg.originTimestamp.nanosecondsField = 0 # UInt32
+            msg.currentUtcOffset = self.clock.timePropertiesDS.currentUtcOffset # Int16
+            msg.grandmasterPriority1 = self.clock.parentDS.grandmasterPriority1 # UInt8
+            msg.grandmasterClockQuality = copy(self.clock.parentDS.grandmasterClockQuality)
+            msg.grandmasterPriority2 = self.clock.parentDS.grandmasterPriority1 # UInt8
+            msg.grandmasterIdentity = self.clock.parentDS.grandmasterIdentity # Octet[8]
+            msg.stepsRemoved = self.clock.currentDS.stepsRemoved # UInt16
+            msg.timeSource = self.clock.timePropertiesDS.timeSource # Enum8
+
+            self.send_message(msg)
+
+    def send_Sync(self):
+        if self.portDS.portState == PTP_STATE.MASTER:
+            msg = ptp.Sync()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.SYNC
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = self.clock.defaultDS.domainNumber
+            msg.flagField.twoStepFlag = self.clock.defaultDS.twoStepFlag
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = self.getSequenceId(PTP_MESG_TYPE.SYNC)
+            msg.controlField = 0x00
+            msg.logMessageInterval = self.portDS.logSyncInterval
+
+            # Sync Fields
+            msg.originTimestamp.secondsField = 0
+            msg.originTimestamp.nanosecondsField = 0
+
+            egress_timestamp = self.send_message(msg, True)
+
+            if self.clock.defaultDS.twoStepFlag:
+                self.send_Follow_Up(msg.sequenceId, egress_timestamp)
+
+    def send_Follow_Up(self, sequenceId, sync_ets):
+        if self.portDS.portState == PTP_STATE.MASTER:
+            msg = ptp.Follow_Up()
+
+            # Header fields
+            msg.messageType = PTP_MESG_TYPE.FOLLOW_UP
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = self.clock.defaultDS.domainNumber
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = sequenceId
+            msg.controlField = 0x02
+            msg.logMessageInterval = self.portDS.logSyncInterval
+
+            # Follow_Up fields
+            msg.preciseOriginTimestamp = ptp.TimeStamp(sync_ets)
+
+            self.send_message(msg)
+
+    def send_Delay_Req(self):
+        """9.5.11, 11.3"""
+        if self.portDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            self.delay_req_timer.stop()
+        else:
+            if self.portDS.delayMechanism != PTP_DELAY_MECH.E2E:
+                print("[WARN] Delay Mechanism mis-match")
+                self.delay_req_timer.stop()
+            else:
+                msg = ptp.Delay_Req()
+
+                # Header fields
+                msg.messageType = ptp.PTP_MESG_TYPE.DELAY_REQ
+                msg.versionPTP = self.portDS.versionNumber
+                msg.messageLength = ptp.Header.parser.size + msg.parser.size
+                msg.domainNumber = self.clock.defaultDS.domainNumber
+                msg.flagField.profile1 = False
+                msg.flagField.profile2 = False
+                msg.correctionField = 0
+                msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+                msg.sequenceId = self.getSequenceId(msg.messageType)
+                msg.controlField = 0x01 # 13.3.2.10, Table 23
+                msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
+
+                # Delay_Req fields
+                msg.originTimestamp = ptp.TimeStamp(0)
+
+                delay_req_ets = self.send_message(msg, True)
+                self.delay = Delay(msg, delay_req_ets)
+
+    def send_Delay_Resp(self, delay_req, delay_req_its):
+        """9.5.12, 11.3"""
+        if self.portDS.portState == PTP_STATE.MASTER and self.portDS.delayMechanism == PTP_DELAY_MECH.E2E:
+            msg = ptp.Delay_Resp()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.DELAY_RESP
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = delay_req.domainNumber
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = delay_req.correctionField
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = delay_req.sequenceId # 11.3.2
+            msg.controlField = 0x03 # 13.3.2.10, Table 23
+            msg.logMessageInterval = self.portDS.logMinDelayReqInterval # 13.3.2.11, Table 24
+
+            # Delay_Resp fields
+            msg.receiveTimestamp = ptp.TimeStamp(delay_req_its)
+            msg.requestingPortIdentity = delay_req.sourcePortIdentity
+
+            self.send_message(msg)
+
+    def send_Pdelay_Req(self):
+        """9.5.13, 11.4.3"""
+
+        if self.portDS.delayMechanism != PTP_DELAY_MECH.P2P:
+            print("[WARN] Delay Mechanism mis-match")
+            self.pdelay_req_timer.stop()
+        else:
+            msg = ptp.Pdelay_Req()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_REQ
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = self.clock.defaultDS.domainNumber
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = self.getSequenceId(msg.messageType)
+            msg.controlField = 0x05 # 13.3.2.10, Table 23
+            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
+
+            # Pdelay_Req fields
+            msg.originTimestamp = ptp.TimeStamp(0) # 11.4.3
+
+            # Timing
+            egress_timestamp = self.send_message(msg, True)
+            self.pdelay = Pdelay(msg, egress_timestamp)
+
+    def send_Pdelay_Resp(self, pdelay_req, pdelay_req_its):
+        """11.4.3"""
+        if self.portDS.delayMechanism != PTP_DELAY_MECH.P2P:
+            print("[WARN] Delay Mechanism mis-match")
+        else:
+            msg = ptp.Pdelay_Resp()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_RESP
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = pdelay_req.domainNumber
+            msg.flagField.twoStepFlag = self.clock.defaultDS.twoStepFlag
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = 0
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = pdelay_req.sequenceId # 11.4.3
+            msg.controlField = 0x05 # 13.3.2.10, Table 23
+            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
+
+            # Pdelay_Resp fields
+            # requestReceiptTimestamp is set based on clock type
+            msg.requestingPortIdentity = pdelay_req.sourcePortIdentity
+
+            if self.clock.defaultDS.twoStepFlag:
+                msg.requestReceiptTimestamp = ptp.TimeStamp(pdelay_req_its)
+                pdelay_resp_ets = self.send_message(msg, True)
+                self.send_Pdelay_Resp_Follow_Up(pdelay_req, pdelay_resp_ets)
+            else:
+                msg.requestReceiptTimestamp = 0
+                # TODO: send message, updating the correctionField with the residence time
+                raise NotImplementedError("One-step Pdelay_Resp sending not implemented.")
+
+    def send_Pdelay_Resp_Follow_Up(self, pdelay_req, pdelay_resp_ets):
+        """11.4.3"""
+        if self.portDS.delayMechanism != PTP_DELAY_MECH.P2P:
+            print("[WARN] Delay Mechanism mis-match")
+        else:
+            msg = ptp.Pdelay_Resp_Follow_Up()
+
+            # Header fields
+            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_RESP_FOLLOW_UP
+            msg.versionPTP = self.portDS.versionNumber
+            msg.messageLength = ptp.Header.parser.size + msg.parser.size
+            msg.domainNumber = pdelay_req.domainNumber
+            msg.flagField.profile1 = False
+            msg.flagField.profile2 = False
+            msg.correctionField = pdelay_req.correctionField
+            msg.sourcePortIdentity = copy(self.portDS.portIdentity)
+            msg.sequenceId = pdelay_req.sequenceId # 11.4.3
+            msg.controlField = 0x05 # 13.3.2.10, Table 23
+            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
+
+            # Pdelay_Resp_Follow_Up fields
+            msg.responseOriginTimestamp = ptp.TimeStamp(pdelay_resp_ets)
+            msg.requestingPortIdentity = pdelay_req.sourcePortIdentity
+
+            self.send_message(msg)
+
+    ## Receive Messages ##
+
+    def process_message(self, buffer, ingress_timestamp):
+        hdr = ptp.Header(buffer)
+        portNumber = self.portDS.portIdentity.portNumber
+
+        if hdr.domainNumber != self.clock.defaultDS.domainNumber:
+            print("[INFO] Ignoring inter domain PTP message")
+        elif hdr.sourcePortIdentity.clockIdentity == self.clock.defaultDS.clockIdentity:
+            if hdr.sourcePortIdentity == self.portDS.portIdentity:
+                print("[WARN] (%d) Message received by sending port" % (portNumber))
+            else:
+                print("[WARN] (%d) Message received by sending clock" % (portNumber))
+                # FIX: put all but lowest numbered port in PASSIVE state
+        else:
+            if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
+                self.recv_Announce(ptp.Announce(buffer))
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.SYNC:
+                self.recv_Sync(ptp.Sync(buffer), ingress_timestamp)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.FOLLOW_UP:
+                self.recv_Follow_Up(ptp.Follow_Up(buffer))
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_REQ:
+                self.recv_Delay_Req(ptp.Delay_Req(buffer), ingress_timestamp)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_RESP:
+                self.recv_Delay_Resp(ptp.Delay_Resp(buffer))
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_REQ:
+                self.recv_Pdelay_Req(ptp.Pdelay_Req(buffer), ingress_timestamp)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_RESP:
+                self.recv_Pdelay_Resp(ptp.Pdelay_Resp(buffer), ingress_timestamp)
+            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_RESP_FOLLOW_UP:
+                self.recv_Pdelay_Resp_Follow_Up(ptp.Pdelay_Resp_Follow_Up(buffer))
+            else:
+                raise NotImplementedError("Message Type Not Implemented: %d" % (hdr.messageType))
+
+    def recv_Announce(self, msg):
+        portNumber = self.portDS.portIdentity.portNumber
+        self.announceReceiptTimeoutTimer.restart()
+        if self.portDS.portState in (ptp.PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
+            print("[RECV] (%d) Announce Ignored (%s)" % (portNumber, self.portDS.portState.name))
+        elif self.portDS.portState == ptp.PTP_STATE.SLAVE and self.clock.parentDS.parentPortIdentity == msg.sourcePortIdentity:
+            print("[RECV] (%d) Announce Received from Master" % (portNumber))
+            self.clock.updateS1(msg)
+        else:
+            print("[RECV] (%d) Announce Received Foreign Master" % (portNumber))
+            self.updateForeignMasterList(msg)
+
+    def recv_Sync(self, msg, sync_its):
+        portNumber = self.portDS.portIdentity.portNumber
+        if self.portDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Sync Ignored (%s)" % (portNumber, self.portDS.portState.name))
+        elif msg.sourcePortIdentity != self.clock.parentDS.parentPortIdentity:
+            print("[RECV] (%d) Sync Ignored (Not Parent)" % (portNumber))
+        else:
+            print("[RECV] (%d) Sync Received" % (portNumber))
+            self.sync_data = Sync_Data(msg, sync_its)
+
+            if not msg.flagField.twoStepFlag:
+                self.synchronize()
+
+    def recv_Follow_Up(self, msg):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[RECV] (%d) Follow Up" % (portNumber))
+        if self.portDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
+            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
+        elif self.portDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
+        elif self.sync_data.sync is None or \
+            msg.sourcePortIdentity != self.sync_data.sync.sourcePortIdentity or \
+            msg.sequenceId != self.sync_data.sync.sequenceId:
+            print("[RECV] (%d) Ignoring Unexpected Follow_Up" % (portNumber))
+        elif msg.sourcePortIdentity != self.clock.parentDS.parentPortIdentity:
+            print("[RECV] (%d) Ignoring Follow_Up from unknown master" % (portNumber))
+        else:
+            self.sync_data.follow_up = msg
+            self.synchronize()
+
+    def recv_Delay_Req(self, msg, delay_req_its):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[RECV] (%d) Delay_Req" % (portNumber))
+        if self.portDS.portState != PTP_STATE.MASTER:
+            print("[RECV] (%d) Ignoring Delay_Req due to state" % (portNumber))
+        else:
+            self.send_Delay_Resp(msg, delay_req_its)
+
+    def recv_Delay_Resp(self, msg):
+        portNumber = self.portDS.portIdentity.portNumber
+        print("[RECV] (%d) Delay_Resp" % (portNumber))
+        if self.portDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
+            print("[RECV] (%d) Ignoring Delay_Resp due to state" % (portNumber))
+        elif msg.requestingPortIdentity != self.delay.req.sourcePortIdentity \
+            or msg.sequenceId != self.delay.req.sequenceId:
+            print("[RECV] (%d) Ignoring Unexpected Delay_Resp" % (portNumber))
+        elif msg.sourcePortIdentity != self.clock.parentDS.parentPortIdentity:
+            print("[RECV] (%d) Ignoring Delay_Resp from non-Master" % (portNumber))
+        else:
+            self.delay.resp = msg
+            # self.delay.calcMeanPathDelay() # Moved to first step of offset calculation
+            self.portDS.logMinDelayReqInterval = msg.logMessageInterval
+
+    def recv_Pdelay_Req(self, msg, pdelay_req_its):
+        print("[RECV] (%d) %s" % (self.portDS.portIdentity.portNumber, msg.messageType.name))
+        self.send_Pdelay_Resp(msg, pdelay_req_its)
+
+    def recv_Pdelay_Resp(self, msg, pdelay_resp_its):
+        print("[RECV] (%d) %s" % (self.portDS.portIdentity.portNumber, msg.messageType.name))
+        self.pdelay.resp = msg
+        self.pdelay.t4 = pdelay_resp_its
+
+        if not msg.flagField.twoStepFlag:
+            self.portDS.peerMeanPathDelay = self.pdelay.calcMeanPathDelay()
+
+    def recv_Pdelay_Resp_Follow_Up(self, msg):
+        print("[RECV] (%d) %s" % (self.portDS.portIdentity.portNumber, msg.messageType.name))
+        self.pdelay.resp_follow_up = msg
+        self.portDS.peerMeanPathDelay = self.pdelay.calcMeanPathDelay()
+
 class OrdinaryClock:
     def __init__(self, profile, clockIdentity, interface, driver_name, driver_config):
         print("[INFO] Clock ID: %s" % (clockIdentity.hex()))
@@ -370,8 +730,6 @@ class OrdinaryClock:
         self.portList = {}
         for i in range(self.transport.number_of_ports):
             self.portList[i+1] = Port(profile, self, i + 1)
-        self.synchronize = Synchronize()
-        self.sequenceTracker = SequenceTracker() # FIX: per port(?)
         # The logAnnounceInterval could be different per-port, but the standard treats it as being
         # the same throughout a domain. The default value is stored here for convience.
         self.announceInterval = 2 ** profile['portDS.logAnnounceInterval']
@@ -458,12 +816,6 @@ class OrdinaryClock:
 
     ## Events ##
 
-    def powerupEvent(self):
-        pass
-
-    def initializeEvent(self):
-        pass
-
     def stateDecisionEvent(self):
         """STATE_DECISION_EVENT 9.2.6.8"""
         print("[EVENT] (*) STATE_DECISION_EVENT")
@@ -494,399 +846,13 @@ class OrdinaryClock:
     def masterSelectedEvent(self, port):
         pass
 
-    ## Send Messages ##
-
-    def send_Announce(self, port):
-
-        # TODO: ensure port is in proper state
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-        print("[SEND] ANNOUNCE (Port %d)" % (portNumber))
-        msg = ptp.Announce()
-
-        # Header fields
-        msg.transportSpecific = 0
-        msg.messageType = ptp.PTP_MESG_TYPE.ANNOUNCE
-        msg.versionPTP = pDS.versionNumber
-        msg.messageLength = ptp.Header.parser.size + ptp.Announce.parser.size
-        msg.domainNumber = self.defaultDS.domainNumber
-        msg.flagField.profile1 = False
-        msg.flagField.profile2 = False
-        msg.flagField.leap61 = self.timePropertiesDS.leap61
-        msg.flagField.leap59 = self.timePropertiesDS.leap59
-        msg.flagField.currentUtcOffsetValid = self.timePropertiesDS.currentUtcOffsetValid
-        msg.flagField.ptpTimescale = self.timePropertiesDS.ptpTimescale
-        msg.flagField.timeTraceable = self.timePropertiesDS.timeTraceable
-        msg.flagField.frequencyTraceable = self.timePropertiesDS.frequencyTraceable
-        msg.correctionField = 0
-        msg.sourcePortIdentity = copy(pDS.portIdentity)
-        msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.ANNOUNCE, b'')
-        msg.controlField = 0x05
-        msg.logMessageInterval = pDS.logAnnounceInterval
-
-        # Announce fields
-        msg.originTimestamp.secondsField = 0 # UInt48
-        msg.originTimestamp.nanosecondsField = 0 # UInt32
-        msg.currentUtcOffset = self.timePropertiesDS.currentUtcOffset # Int16
-        msg.grandmasterPriority1 = self.parentDS.grandmasterPriority1 # UInt8
-        msg.grandmasterClockQuality = copy(self.parentDS.grandmasterClockQuality)
-        msg.grandmasterPriority2 = self.parentDS.grandmasterPriority1 # UInt8
-        msg.grandmasterIdentity = self.parentDS.grandmasterIdentity # Octet[8]
-        msg.stepsRemoved = self.currentDS.stepsRemoved # UInt16
-        msg.timeSource = self.timePropertiesDS.timeSource # Enum8
-
-        self.transport.send_message(msg, portNumber)
-
-    def send_Sync(self, port):
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-        if pDS.portState == PTP_STATE.MASTER:
-            print("[SEND] SYNC (Port %d)" % (portNumber))
-            msg = ptp.Sync()
-            msg.transportSpecific = 0
-            msg.messageType = ptp.PTP_MESG_TYPE.SYNC
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + ptp.Sync.parser.size
-            msg.domainNumber = self.defaultDS.domainNumber
-            msg.flagField.twoStepFlag = self.defaultDS.twoStepFlag
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = 0
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, ptp.PTP_MESG_TYPE.SYNC, b'')
-            msg.controlField = 0x00
-            msg.logMessageInterval = pDS.logSyncInterval
-
-            msg.originTimestamp.secondsField = 0
-            msg.originTimestamp.nanosecondsField = 0
-
-            egressTimestamp = self.transport.send_message(msg, portNumber, True)
-
-            if self.defaultDS.twoStepFlag:
-                self.send_Follow_Up(portNumber, msg.sequenceId, egressTimestamp)
-
-    def send_Follow_Up(self, portNumber, sequenceId, egressTimestamp):
-        port = self.portList[portNumber]
-        if port.portDS.portState == PTP_STATE.MASTER:
-            print("[SEND] Follow Up (Port %d)" % (portNumber))
-            pDS = self.portList[portNumber].portDS
-            msg = ptp.Follow_Up()
-
-            # Header fields
-            msg.messageType = ptp.PTP_MESG_TYPE.FOLLOW_UP
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + ptp.Follow_Up.parser.size
-            msg.domainNumber = self.defaultDS.domainNumber
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = 0
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = sequenceId
-            msg.controlField = 0x02
-            msg.logMessageInterval = pDS.logSyncInterval
-
-            # Follow_Up fields
-            msg.preciseOriginTimestamp = ptp.TimeStamp(egressTimestamp)
-
-            self.transport.send_message(msg, portNumber)
-
-    def send_Delay_Req(self, port):
-        """9.5.11, 11.3"""
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-        if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            port.delay_req_timer.stop()
-        else:
-            if pDS.delayMechanism != PTP_DELAY_MECH.E2E:
-                print("[WARN] Delay Mechanism mis-match")
-                port.delay_req_timer.stop()
-            else:
-                print("[SEND] (%d) Delay_Req " % (portNumber))
-                msg = ptp.Delay_Req()
-
-                # Header fields
-                msg.messageType = ptp.PTP_MESG_TYPE.DELAY_REQ
-                msg.versionPTP = pDS.versionNumber
-                msg.messageLength = ptp.Header.parser.size + msg.parser.size
-                msg.domainNumber = self.defaultDS.domainNumber
-                msg.flagField.profile1 = False
-                msg.flagField.profile2 = False
-                msg.correctionField = 0
-                msg.sourcePortIdentity = copy(pDS.portIdentity)
-                msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, msg.messageType, b'')
-                msg.controlField = 0x01 # 13.3.2.10, Table 23
-                msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
-
-                # Delay_Req fields
-                msg.originTimestamp = ptp.TimeStamp(0)
-
-                delay_req_ets = self.transport.send_message(msg, portNumber, True)
-                self.synchronize.delay_req = msg
-                self.synchronize.delay_req_ets = delay_req_ets
-                self.synchronize.delay_req_its = None
-                self.synchronize.delay_resp = None
-
-    def send_Delay_Resp(self, portNumber, delay_req, delay_req_its):
-        """9.5.12, 11.3"""
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState == PTP_STATE.MASTER and pDS.delayMechanism == PTP_DELAY_MECH.E2E:
-            print("[SEND] (%d) Delay_Resp " % (portNumber))
-            msg = ptp.Delay_Resp()
-            # Header fields
-            msg.messageType = ptp.PTP_MESG_TYPE.DELAY_RESP
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + msg.parser.size
-            msg.domainNumber = delay_req.domainNumber
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = delay_req.correctionField
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = delay_req.sequenceId # 11.3.2
-            msg.controlField = 0x03 # 13.3.2.10, Table 23
-            msg.logMessageInterval = pDS.logMinDelayReqInterval # 13.3.2.11, Table 24
-            # Delay_Resp fields
-            msg.receiveTimestamp = ptp.TimeStamp(delay_req_its)
-            msg.requestingPortIdentity = delay_req.sourcePortIdentity
-
-            self.transport.send_message(msg, portNumber)
-
-    def send_Pdelay_Req(self, port):
-        """9.5.13, 11.4.3"""
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-
-        if pDS.delayMechanism != PTP_DELAY_MECH.P2P:
-            print("[WARN] Delay Mechanism mis-match")
-            port.pdelay_req_timer.stop()
-        else:
-            print("[SEND] (%d) Pdelay_Req" % (portNumber))
-            msg = ptp.Pdelay_Req()
-
-            # Header fields
-            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_REQ
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + msg.parser.size
-            msg.domainNumber = self.defaultDS.domainNumber
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = 0
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = self.sequenceTracker.getSequenceId(portNumber, msg.messageType, b'')
-            msg.controlField = 0x05 # 13.3.2.10, Table 23
-            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
-
-            # Pdelay_Req fields
-            msg.originTimestamp = ptp.TimeStamp(0) # 11.4.3
-
-            # Timing
-            egressTimestamp = self.transport.send_message(msg, portNumber, True)
-            self.synchronize.pdelay_req = msg
-            self.synchronize.pdelay_req_ets = egressTimestamp # t1
-            self.synchronize.pdelay_req_its = None # t2
-            self.synchronize.pdelay_resp = None
-            self.synchronize.pdelay_resp_ets = None # t3
-            self.synchronize.pdelay_resp_its = None # t4
-
-    def send_Pdelay_Resp(self, port, pdelay_req, pdelay_req_its):
-        """11.4.3"""
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-
-        if pDS.delayMechanism != PTP_DELAY_MECH.P2P:
-            print("[WARN] Delay Mechanism mis-match")
-        else:
-            print("[SEND] (%d) Pdelay_Resp" % (portNumber))
-            msg = ptp.Pdelay_Resp()
-
-            # Header fields
-            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_RESP
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + msg.parser.size
-            msg.domainNumber = pdelay_req.domainNumber
-            msg.flagField.twoStepFlag = self.defaultDS.twoStepFlag
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = 0
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = pdelay_req.sequenceId # 11.4.3
-            msg.controlField = 0x05 # 13.3.2.10, Table 23
-            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
-
-            # Pdelay_Resp fields
-            # requestReceiptTimestamp is set based on clock type
-            msg.requestingPortIdentity = pdelay_req.sourcePortIdentity
-
-            if self.defaultDS.twoStepFlag:
-                msg.requestReceiptTimestamp = ptp.TimeStamp(pdelay_req_its)
-                pdelay_resp_ets = self.transport.send_message(msg, portNumber, True)
-                self.send_Pdelay_Resp_Follow_Up(port, pdelay_req, pdelay_resp_ets)
-            else:
-                msg.requestReceiptTimestamp = 0
-                # TODO: send message, updating the correctionField with the residence time
-                raise NotImplementedError("One-step Pdelay_Resp sending not implemented.")
-
-    def send_Pdelay_Resp_Follow_Up(self, port, pdelay_req, pdelay_resp_ets):
-        """11.4.3"""
-        pDS = port.portDS
-        portNumber = pDS.portIdentity.portNumber
-
-        if pDS.delayMechanism != PTP_DELAY_MECH.P2P:
-            print("[WARN] Delay Mechanism mis-match")
-        else:
-            print("[SEND] (%d) Pdelay_Res_Follow_Upp" % (portNumber))
-            msg = ptp.Pdelay_Resp_Follow_Up()
-
-            # Header fields
-            msg.messageType = ptp.PTP_MESG_TYPE.PDELAY_RESP_FOLLOW_UP
-            msg.versionPTP = pDS.versionNumber
-            msg.messageLength = ptp.Header.parser.size + msg.parser.size
-            msg.domainNumber = pdelay_req.domainNumber
-            msg.flagField.profile1 = False
-            msg.flagField.profile2 = False
-            msg.correctionField = pdelay_req.correctionField
-            msg.sourcePortIdentity = copy(pDS.portIdentity)
-            msg.sequenceId = pdelay_req.sequenceId # 11.4.3
-            msg.controlField = 0x05 # 13.3.2.10, Table 23
-            msg.logMessageInterval = 0x7F # 13.3.2.11, Table 24
-
-            # Pdelay_Resp_Follow_Up fields
-            msg.responseOriginTimestamp = ptp.TimeStamp(pdelay_resp_ets)
-            msg.requestingPortIdentity = pdelay_req.sourcePortIdentity
-
-            self.transport.send_message(msg, portNumber)
-
-    ## Recv Messages ##
-
     async def listen(self):
         for port in self.portList.values():
             port.changeState(ptp.PTP_STATE.LISTENING)
 
         while True:
             port_number, ingress_timestamp, msg = await self.transport.recv_message()
-            if msg: self.process_message(msg, port_number, ingress_timestamp)
-
-    def process_message(self, buffer, portNumber, ingress_timestamp):
-        hdr = ptp.Header(buffer)
-
-        if hdr.domainNumber != self.defaultDS.domainNumber:
-            print("[WARN] Ignoring inter domain PTP message")
-        elif hdr.sourcePortIdentity.clockIdentity == self.defaultDS.clockIdentity:
-            if hdr.sourcePortIdentity == self.portList[portNumber].portDS.sourcePortIdentity:
-                print("[WARN] Message received by sending port (%d)" % (portNumber))
-            else:
-                print("[WARN] Message received by sending clock (%d)" % (portNumber))
-                # FIX: put all but lowest numbered port in PASSIVE state
-        else:
-            if hdr.messageType == ptp.PTP_MESG_TYPE.ANNOUNCE:
-                self.recv_Announce(ptp.Announce(buffer), portNumber)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.SYNC:
-                self.recv_Sync(ptp.Sync(buffer), portNumber, ingress_timestamp)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.FOLLOW_UP:
-                self.recv_Follow_Up(ptp.Follow_Up(buffer), portNumber)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_REQ:
-                self.recv_Delay_Req(ptp.Delay_Req(buffer), portNumber, ingress_timestamp)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.DELAY_RESP:
-                self.recv_Delay_Resp(ptp.Delay_Resp(buffer), portNumber)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_REQ:
-                self.recv_Pdelay_Req(ptp.Pdelay_Req(buffer), portNumber, ingress_timestamp)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_RESP:
-                self.recv_Pdelay_Resp(ptp.Pdelay_Resp(buffer), portNumber, ingress_timestamp)
-            elif hdr.messageType == ptp.PTP_MESG_TYPE.PDELAY_RESP_FOLLOW_UP:
-                self.recv_Pdelay_Resp_Follow_Up(ptp.Pdelay_Resp_Follow_Up(buffer), portNumber)
-            else:
-                raise NotImplementedError("Message Type Not Implemented: %d" % (hdr.messageType))
-
-    def recv_Announce(self, msg, portNumber):
-        pDS = self.portList[portNumber].portDS
-        self.portList[portNumber].announceReceiptTimeoutTimer.restart()
-        if pDS.portState in (ptp.PTP_STATE.INITIALIZING, ptp.PTP_STATE.DISABLED, ptp.PTP_STATE.FAULTY):
-            print("[RECV] (%d) Announce Ignored (%s)" % (portNumber, pDS.portState.name))
-        elif pDS.portState == ptp.PTP_STATE.SLAVE and self.parentDS.parentPortIdentity == msg.sourcePortIdentity:
-            print("[RECV] (%d) Announce Received from Master" % (portNumber))
-            self.updateS1(msg)
-        else:
-            print("[RECV] (%d) Announce Received Foreign Master" % (portNumber))
-            self.portList[portNumber].updateForeignMasterList(msg)
-
-    def recv_Sync(self, msg, portNumber, sync_its):
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            print("[RECV] (%d) Sync Ignored (%s)" % (portNumber, pDS.portState.name))
-        elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
-            print("[RECV] (%d) Sync Ignored (Not Parent)" % (portNumber))
-        else:
-            print("[RECV] (%d) Sync Received" % (portNumber))
-            self.synchronize.delayMechanism = pDS.delayMechanism
-            self.synchronize.sync = msg
-            self.synchronize.sync_its = sync_its
-            # self.synchronize.sync_ets = None # Set based on clock type
-            self.synchronize.follow_up = None
-
-            if msg.flagField.twoStepFlag:
-                self.synchronize.sync_ets = None
-            else:
-                self.synchronize.sync_ets = msg.originTimestamp.ns()
-                self.synchronize.calcOffsetFromMaster()
-
-    def recv_Follow_Up(self, msg, portNumber):
-        print("[RECV] (%d) Follow Up" % (portNumber))
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState in (PTP_STATE.INITIALIZING, PTP_STATE.DISABLED, PTP_STATE.FAULTY):
-            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
-        elif pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            print("[RECV] (%d) Ignoring Follow Up due to state" % (portNumber))
-        elif self.synchronize.sync is None or \
-            msg.sourcePortIdentity != self.synchronize.sync.sourcePortIdentity or \
-            msg.sequenceId != self.synchronize.sync.sequenceId:
-            print("[RECV] (%d) Ignoring Unexpected Follow_Up" % (portNumber))
-        elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
-            print("[RECV] (%d) Ignoring Follow_Up from unknown master" % (portNumber))
-        else:
-            self.synchronize.follow_up = msg
-            self.synchronize.sync_ets = msg.preciseOriginTimestamp.ns()
-            self.synchronize.calcOffsetFromMaster()
-
-    def recv_Delay_Req(self, msg, portNumber, delay_req_its):
-        print("[RECV] (%d) Delay_Req" % (portNumber))
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState != PTP_STATE.MASTER:
-            print("[RECV] (%d) Ignoring Delay_Req due to state" % (portNumber))
-        else:
-            self.send_Delay_Resp(portNumber, msg, delay_req_its)
-
-    def recv_Delay_Resp(self, msg, portNumber):
-        print("[RECV] (%d) Delay_Resp" % (portNumber))
-        pDS = self.portList[portNumber].portDS
-        if pDS.portState not in (PTP_STATE.SLAVE, PTP_STATE.UNCALIBRATED):
-            print("[RECV] (%d) Ignoring Delay_Resp due to state" % (portNumber))
-        elif msg.requestingPortIdentity != self.synchronize.delay_req.sourcePortIdentity \
-            or msg.sequenceId != self.synchronize.delay_req.sequenceId:
-            print("[RECV] (%d) Ignoring Unexpected Delay_Resp" % (portNumber))
-        elif msg.sourcePortIdentity != self.parentDS.parentPortIdentity:
-            print("[RECV] (%d) Ignoring Delay_Resp from non-Master" % (portNumber))
-        else:
-            self.synchronize.delay_req_its = msg.receiveTimestamp.ns()
-            self.synchronize.delay_resp = msg
-            # self.synchronize.calcMeanPathDelay() # Move to first step of offset calculation
-            pDS.logMinDelayReqInterval = msg.logMessageInterval
-
-    def recv_Pdelay_Req(self, msg, portNumber, pdelay_req_its):
-        print("[RECV] (%d) Pdelay_Req" % (portNumber))
-        self.send_Pdelay_Resp(self.portList[portNumber], msg, pdelay_req_its)
-
-    def recv_Pdelay_Resp(self, msg, portNumber, pdelay_resp_its):
-        self.synchronize.pdelay_resp = msg
-        self.synchronize.pdelay_resp_its = pdelay_resp_its
-
-        if msg.flagField.twoStepFlag:
-            self.synchronize.pdelay_req_its = msg.requestReceiptTimestamp.ns()
-        else:
-            self.synchronize.calcMeanPathDelay()
-
-    def recv_Pdelay_Resp_Follow_Up(self, msg, portNumber):
-        self.synchronize.pdelay_resp_follow_up = msg
-        self.synchronize.pdelay_resp_ets = msg.responseOriginTimestamp.ns()
-        self.synchronize.calcMeanPathDelay()
+            if msg: self.portList[port_number].process_message(msg, ingress_timestamp)
 
 class TransparentClock:
     class Port:
