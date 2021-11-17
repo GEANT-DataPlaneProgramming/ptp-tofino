@@ -263,7 +263,7 @@ class Announce(Header):
             self.stepsRemoved,
             self.timeSource
         )
-        return header_bytes + Announce.parser.pack(*t)
+        return header_bytes + self.parser.pack(*t)
 
 class Sync(Header):
     parser = struct.Struct('!6sL')
@@ -349,11 +349,12 @@ class Delay_Resp(Header):
 class Pdelay_Req(Header):
     parser = struct.Struct('!6sL10x')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
         Header.__init__(self)
         self.originTimestamp = TimeStamp()
         # self.originTimestamp.secondsField = None # UInt48
         # self.originTimestamp.nanosecondsField = None # UInt32
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
         Header.parse(self, buffer[:Header.parser.size])
@@ -369,58 +370,64 @@ class Pdelay_Req(Header):
         )
         return header_bytes + self.parser.pack(*t)
 
-class Pdelay_Resp:
+class Pdelay_Resp(Header):
     parser = struct.Struct('!6sL8sH')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
+        Header.__init__(self)
         self.requestReceiptTimestamp = TimeStamp()
         # self.receiveTimestamp.secondsField = None # UInt48
         # self.receiveTimestamp.nanosecondsField = None # UInt32
         self.requestingPortIdentity = PortIdentity()
         # self.requestingPortIdentity.clockIdentity = None # Octet[8]
         # self.requestingPortIdentity.portNumber = None # UInt16
-
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        Header.parse(self, buffer[:Header.parser.size])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.requestReceiptTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.requestReceiptTimestamp.nanosecondsField = t[1]
         self.requestingPortIdentity.clockIdentity = t[2]
         self.requestingPortIdentity.portNumber = t[3]
 
     def bytes(self):
+        header_bytes = Header.bytes(self)
         t = (
             struct.pack('!Q', self.requestReceiptTimestamp.secondsField)[2:8],
             self.requestReceiptTimestamp.nanosecondsField,
             self.requestingPortIdentity.clockIdentity,
             self.requestingPortIdentity.portNumber
         )
-        return self.parser.pack(*t)
+        return header_bytes + self.parser.pack(*t)
 
-class Pdelay_Resp_Follow_Up:
+class Pdelay_Resp_Follow_Up(Header):
     parser = struct.Struct('!6sL8sH')
 
-    def __init__(self):
+    def __init__(self, buffer=b''):
+        Header.__init__(self)
         self.responseOriginTimestamp = TimeStamp()
         # self.receiveTimestamp.secondsField = None # UInt48
         # self.receiveTimestamp.nanosecondsField = None # UInt32
         self.requestingPortIdentity = PortIdentity()
         # self.requestingPortIdentity.clockIdentity = None # Octet[8]
         # self.requestingPortIdentity.portNumber = None # UInt16
-
+        if buffer: self.parse(buffer)
 
     def parse(self, buffer):
-        t = self.parser.unpack(buffer)
+        Header.parse(self, buffer[:Header.parser.size])
+        t = self.parser.unpack(buffer[Header.parser.size:][:self.parser.size])
         self.responseOriginTimestamp.secondsField = struct.unpack('!Q', b'\x00\x00' + t[0])[0]
         self.responseOriginTimestamp.nanosecondsField = t[1]
         self.requestingPortIdentity.clockIdentity = t[2]
         self.requestingPortIdentity.portNumber = t[3]
 
     def bytes(self):
+        header_bytes = Header.bytes(self)
         t = (
             struct.pack('!Q', self.responseOriginTimestamp.secondsField)[2:8],
             self.responseOriginTimestamp.nanosecondsField,
             self.requestingPortIdentity.clockIdentity,
             self.requestingPortIdentity.portNumber
         )
-        return self.parser.pack(*t)
+        return header_bytes + self.parser.pack(*t)
