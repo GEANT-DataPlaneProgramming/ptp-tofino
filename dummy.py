@@ -54,14 +54,14 @@ class Socket:
 
         self.skt.send(cpu_hdr.bytes() + msg)
         if get_timestamp:
-            timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS7 from tofino
+            timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME)
 
         return timestamp
 
     async def recv(self):
         loop = asyncio.get_event_loop()
         msg = await loop.sock_recv(self.skt, MAX_MSG_SIZE)
-        timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME) # TODO: get TS1 from CPU header
+        timestamp = time.clock_gettime_ns(time.CLOCK_REALTIME)
         cpu_hdr = CPU_Header(msg)
         port_list = [port for (port, d_p) in self.ports.items() if d_p == cpu_hdr.device_port]
         if len(port_list) == 1:

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 # pylint: disable=invalid-name
+# pylint: disable=missing-module-docstring
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-function-docstring
 
 # TODO: Implement IPv4/6 UDP transports
 

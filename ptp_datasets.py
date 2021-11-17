@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 
 # pylint: disable=invalid-name
+# pylint: disable=missing-module-docstring
+# pylint: disable=missing-class-docstring
+# pylint: disable=missing-function-docstring
+# pylint: disable=too-few-public-methods
+# pylint: disable=too-many-instance-attributes
+# pylint: disable=multiple-statements
 
 from copy import copy
 import collections
 import time
-from ptp import *
+from ptp import PTP_STATE, PTP_TIME_SRC, PortIdentity, Announce, ClockQuality
 
 ### Ordinary and Boundary Clock Data Sets
 ## Clock Data Sets
@@ -15,7 +21,7 @@ from ptp import *
 
 class DefaultDS:
     # pylint: disable=too-many-instance-attributes
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
+    def __init__(self, profile, clockIdentity, numberPorts):
         # Static Members
         self.twoStepFlag = True # FIX: HW Dependant
         self.clockIdentity = clockIdentity
@@ -26,10 +32,10 @@ class DefaultDS:
         self.clockQuality.clockAccuracy = 0xFE # Unknown
         self.clockQuality.offsetScaledLogVariance = 0xffff # not computed
         # Configurable Members
-        self.priority1 = PTP_PROFILE['defaultDS.priority1']
-        self.priority2 = PTP_PROFILE['defaultDS.priority2']
-        self.domainNumber = PTP_PROFILE['defaultDS.domainNumber']
-        self.slaveOnly = PTP_PROFILE['defaultDS.slaveOnly']
+        self.priority1 = profile['defaultDS.priority1']
+        self.priority2 = profile['defaultDS.priority2']
+        self.domainNumber = profile['defaultDS.domainNumber']
+        self.slaveOnly = profile['defaultDS.slaveOnly']
 
 class CurrentDS:
     def __init__(self):
@@ -87,22 +93,22 @@ class PortDS:
 ## Transparent Clock Data Sets
 
 class TransparentClockDefaultDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, numberPorts):
+    def __init__(self, profile, clockIdentity, numberPorts):
         # Static Memebrs
         self.clockIdentity = clockIdentity
         self.numberPorts = numberPorts
         # Configurable Members
-        self.delayMechanism = PTP_PROFILE['portDS.delayMechanism']
+        self.delayMechanism = profile['portDS.delayMechanism']
         self.primaryDomain = 0
 
 class TransparentClockPortDS:
-    def __init__(self, PTP_PROFILE, clockIdentity, portNumber):
+    def __init__(self, profile, clockIdentity, portNumber):
         # Satic Members
         self.portIdentity = PortIdentity()
         self.portIdentity.clockIdentity = clockIdentity
         self.portIdentity.portNumber = portNumber
         # Dynamic Members
-        self.logMinPdelayReqInterval = PTP_PROFILE['portDS.logMinPdelayReqInterval']
+        self.logMinPdelayReqInterval = profile['portDS.logMinPdelayReqInterval']
         self.faultyFlag = False
         self.peerMeanPathDelay = 0
 
@@ -137,10 +143,10 @@ class BMC_Entry:
         self.msg = None
         if len(args) == 1 and isinstance(args[0], DefaultDS):
             self.parse_DefaultDS(*args)
-        elif len(args) == 2 and isinstance(arg[0], Announce) and isinstnace(arg[1], PortDS):
+        elif len(args) == 2 and isinstance(args[0], Announce) and isinstance(args[1], PortDS):
             self.parse_Announce(*args)
         elif len(args) != 0:
-            print ("[ERROR] Unexpected use of BMC_Entry")
+            print("[ERROR] Unexpected use of BMC_Entry")
 
     def parse_DefaultDS(self, defaultDS):
         """Use DefaultDS as information source for data set comparison algorithm, Table 12"""

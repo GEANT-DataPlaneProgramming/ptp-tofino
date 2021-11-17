@@ -6,7 +6,6 @@
 
 import sys
 import socket
-import time
 import asyncio
 
 sys.path.append('./gen-py')
@@ -31,7 +30,7 @@ def thrift_connect():
 
     bProtocol = TBinaryProtocol.TBinaryProtocol(transport)
     protocol = TMultiplexedProtocol.TMultiplexedProtocol(bProtocol, 'ts')
-    return ts.Client(protocol)
+    return ts.Client(protocol) # TODO: This shouldn't work, ts is undefined
 
 class CPU_Header:
     def __init__(self, buffer=b''):

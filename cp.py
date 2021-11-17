@@ -123,7 +123,6 @@ class Sync_Data:
         print("[INFO] Offset From Master: %0.2f" % (offsetFromMaster))
         return offsetFromMaster
 
-
 class Delay:
     def __init__(self, delay_req, delay_req_egress_timestamp):
         self.req = delay_req
@@ -880,7 +879,7 @@ async def main():
     (options, _) = parser.parse_args()
     pid = os.getpid()
     print("[INFO] PID: %d" % (pid))
-    clock = OrdinaryClock(ptp.PTP_PROFILE_E2E, randomClockIdentity, options.interface, options.driver, options.driver_config)
+    clock = OrdinaryClock(ptp.PTP_PROFILE_P2P, randomClockIdentity, options.interface, options.driver, options.driver_config)
     await clock.listen()
 
 asyncio.run(main())
