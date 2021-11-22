@@ -178,10 +178,11 @@ class Transport:
         return timestamp
 
     async def recv_message(self):
-        port_number, timestamp, msg = await self.skt.recv()
-        if msg:
-            ethernet = Ethernet(msg)
+        port_number, timestamp, buffer = await self.skt.recv()
+        if buffer:
+            ethernet = Ethernet(buffer)
             if ethernet.type == ETH_P_1588:
-                msg = msg[Ethernet.parser.size:]
+                hdr = buffer[:Ethernet.parser.size]
+                msg = buffer[Ethernet.parser.size:]
 
-        return (port_number, timestamp, msg)
+        return (port_number, timestamp, msg, hdr)
