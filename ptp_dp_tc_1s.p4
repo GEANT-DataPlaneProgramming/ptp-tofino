@@ -6,9 +6,8 @@
 #define ETH_P_IPV6 0x86DD
 #define ETH_P_1588 0x88F7
 
-struct metadata_t {
-    bit<48> ptp_in_correctionField;
-    bit<48> ptp_out_correctionField;
+struct ingress_metadata_t {
+    bit<64> ingress_timestamp;
 }
 struct egress_metadata_t {}
 
@@ -18,20 +17,7 @@ header ethernet_h {
     bit<16> ether_type;
 }
 
-// TODO: correctionField needs to be isolated
-header ptp_ingress_h {
-    bit<4> transportSpecific;
-    bit<4> messageType;
-    bit<4> reserved_1;
-    bit<4> versionPTP;
-    bit<16> messageLength;
-    bit<8> domainNumber;
-    bit<8> reserved_2;
-    bit<16> flagField;
-    bit<48> correctionField;
-}
-
-header ptp_egress_h {
+header ptp_h {
     bit<4> transportSpecific;
     bit<4> messageType;
     bit<4> reserved_1;
@@ -43,32 +29,24 @@ header ptp_egress_h {
 }
 
 header ptp_correctionField_h {
-    bit<48> nanoseconds;
-    bit<16> factional_ns;
+    bit<64> value;
 }
 
-struct ingress_header_t {
-    ethernet_h ethernet;
-    // IPv4
-    // IPv6
-    // UDP
-    ptp_ingress_h ptp;
-}
-
-struct egress_header_t {
+struct header_t {
     ptp_metadata_t ptp_metadata;
     ethernet_h ethernet;
     // IPv4
     // IPv6
     // UDP
-    ptp_egress_h ptp;
+    ptp_h ptp;
     ptp_correctionField_h ptp_correctionField;
+
 }
 
 parser SwitchIngressParser(
         packet_in pkt,
-        out ingress_header_t hdr,
-        out metadata_t ig_md,
+        out header_t hdr,
+        out ingress_metadata_t ig_md,
         out ingress_intrinsic_metadata_t ig_intr_md) {
 
     state start {
@@ -91,14 +69,14 @@ parser SwitchIngressParser(
 
     state parse_ptp {
         pkt.extract(hdr.ptp);
-        ig_md.ptp_in_correctionField = hdr.ptp.correctionField;
+        pkt.extract(hdr.ptp_correctionField);
         transition accept;
     }
 }
 
 control SwitchIngress(
-        inout ingress_header_t hdr,
-        inout metadata_t ig_md,
+        inout header_t hdr,
+        inout ingress_metadata_t ig_md,
         in    ingress_intrinsic_metadata_t ig_intr_md,
         in    ingress_intrinsic_metadata_from_parser_t ig_prsr_md,
         inout ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md,
@@ -114,13 +92,14 @@ control SwitchIngress(
     }
 
     action ptp_modify_correctionField() {
-        hdr.ptp.correctionField = ig_md.ptp_out_correctionField;
+        hdr.ptp_correctionField.value = hdr.ptp_correctionField.value - ig_md.ingress_timestamp;
     }
 
     table ptp {
         key = {
             hdr.ptp.messageType & 0xC : exact;
         }
+        size = 1;
         actions = {
             ptp_modify_correctionField;
             @defaultonly NoAction;
@@ -135,6 +114,7 @@ control SwitchIngress(
         key = {
             ig_intr_md.ingress_port : exact;
         }
+        size = 256;
         actions = {
             set_egress;
             drop_packet;
@@ -148,7 +128,7 @@ control SwitchIngress(
 
     apply {
         if (hdr.ptp.isValid()) {
-            ig_md.ptp_out_correctionField = ig_md.ptp_in_correctionField - ig_intr_md.ingress_mac_tstamp;
+            ig_md.ingress_timestamp[63:16] = ig_intr_md.ingress_mac_tstamp;
             ptp.apply();
         }
         forwarding.apply();
@@ -157,17 +137,18 @@ control SwitchIngress(
 
 control SwitchIngressDeparser(
         packet_out pkt,
-        inout ingress_header_t hdr,
-        in metadata_t ig_md,
+        inout header_t hdr,
+        in ingress_metadata_t ig_md,
         in ingress_intrinsic_metadata_for_deparser_t ig_dprsr_md) {
     apply {
          pkt.emit(hdr);
     }
+
 }
 
 parser SwitchEgressParser(
         packet_in pkt,
-        out egress_header_t hdr,
+        out header_t hdr,
         out egress_metadata_t eg_md,
         out egress_intrinsic_metadata_t eg_intr_md) {
 
@@ -194,19 +175,19 @@ parser SwitchEgressParser(
 }
 
 control SwitchEgress(
-        inout egress_header_t hdr,
+        inout header_t hdr,
         inout egress_metadata_t eg_md,
         in egress_intrinsic_metadata_t eg_intr_md,
         in egress_intrinsic_metadata_from_parser_t eg_intr_from_prsr,
         inout egress_intrinsic_metadata_for_deparser_t eg_intr_md_for_dprsr,
         inout egress_intrinsic_metadata_for_output_port_t eg_intr_md_for_oport) {
 
-    action enable_ts6(bit<8> udp_cksum_byte_offset, bit<8>cf_byte_offset) {
+    action enable_ts6(bit<8> udp_cksum_byte_offset, bit<8> cf_byte_offset) {
         eg_intr_md_for_oport.update_delay_on_tx = 1;
         hdr.ptp_metadata.setValid();
         hdr.ptp_metadata.udp_cksum_byte_offset = udp_cksum_byte_offset;
         hdr.ptp_metadata.cf_byte_offset = cf_byte_offset;
-        hdr.ptp_metadata.updated_cf = hdr.ptp_correctionField.nanoseconds;
+        hdr.ptp_metadata.updated_cf = hdr.ptp_correctionField.value[63:16];
         hdr.ptp_correctionField.setInvalid();
     }
 
@@ -215,6 +196,7 @@ control SwitchEgress(
             hdr.ethernet.ether_type : exact;
             hdr.ptp.messageType & 0xC: exact;
         }
+        size = 1;
         actions = {
             enable_ts6;
             @defaultonly NoAction;
@@ -232,7 +214,7 @@ control SwitchEgress(
 
 control SwitchEgressDeparser(
         packet_out pkt,
-        inout egress_header_t hdr,
+        inout header_t hdr,
         in egress_metadata_t eg_md,
         in egress_intrinsic_metadata_for_deparser_t eg_dprsr_md) {
     apply {
