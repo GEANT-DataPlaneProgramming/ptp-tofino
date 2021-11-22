@@ -18,7 +18,7 @@ import os
 import ptp
 from ptp_transport import Transport
 from ptp_datasets import DefaultDS, CurrentDS, ParentDS, TimePropertiesDS, PortDS, ForeignMasterDS
-from ptp_datasets import TransparentClockDefaultDS, TransparentClockPortDS, BMC_Entry
+from ptp_datasets import BMC_Entry
 from ptp import PTP_STATE, PTP_DELAY_MECH, PTP_MESG_TYPE
 
 # TODO: Fix Logging
@@ -852,17 +852,6 @@ class OrdinaryClock:
         while True:
             port_number, ingress_timestamp, msg = await self.transport.recv_message()
             if msg: self.portList[port_number].process_message(msg, ingress_timestamp)
-
-class TransparentClock:
-    class Port:
-        def __init__(self, profile, clock, portNumber):
-            self.transparentClockPortDS = TransparentClockPortDS(profile, clock.defaultDS.clockIdentity, portNumber)
-
-    def __init__(self, profile, clockIdentity, numberPorts):
-        self.transparentClockDefaultDS = TransparentClockDefaultDS(profile, clockIdentity, numberPorts)
-        self.portList = {}
-        for i in range(numberPorts):
-            self.portList[i+1] = self.Port(profile, self, i + 1)
 
 ### Main ###
 
