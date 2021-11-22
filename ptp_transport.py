@@ -177,6 +177,11 @@ class Transport:
 
         return timestamp
 
+    def send_buffer(self, buffer, port_number, get_timestamp=False):
+        # TODO: merge this with send_message
+        # TODO: update UDP checksum if needed
+        return self.skt.send(buffer, port_number, get_timestamp)
+
     async def recv_message(self):
         while True:
             port_number, timestamp, buffer = await self.skt.recv()
