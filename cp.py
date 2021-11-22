@@ -850,8 +850,8 @@ class OrdinaryClock:
             port.changeState(ptp.PTP_STATE.LISTENING)
 
         while True:
-            port_number, ingress_timestamp, msg, _ = await self.transport.recv_message()
-            if msg: self.portList[port_number].process_message(msg, ingress_timestamp)
+            buffer, msg_offset, port_number, ingress_timestamp = await self.transport.recv_message()
+            self.portList[port_number].process_message(buffer[msg_offset:], ingress_timestamp)
 
 ### Main ###
 
