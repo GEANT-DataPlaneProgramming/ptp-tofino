@@ -79,52 +79,52 @@ def calc_offset(pkt):
     print("%0.1f, %0.1f, %0.1f, %0.1f, " % (ts7_offset, ts7_owd, ts7_d1, ts7_d2), end='')
     print("%d, %d" % (local_ets_delta, remote_ets_delta))
 
-def calc_ts6_offset(pkt):
-    time_in_switch = pkt['remote_egress_ts'] - pkt['remote_ingress_ts']
-    round_trip_time = pkt['local_ingress_ts'] - pkt['local_egress_ts']
-    time_on_wire = round_trip_time - time_in_switch
-    one_way_delay = time_on_wire / 2
-    offset = pkt['local_egress_ts'] + one_way_delay - pkt['remote_ingress_ts']
+# def calc_ts6_offset(pkt):
+#     time_in_switch = pkt['remote_egress_ts'] - pkt['remote_ingress_ts']
+#     round_trip_time = pkt['local_ingress_ts'] - pkt['local_egress_ts']
+#     time_on_wire = round_trip_time - time_in_switch
+#     one_way_delay = time_on_wire / 2
+#     offset = pkt['local_egress_ts'] + one_way_delay - pkt['remote_ingress_ts']
+#
+#     print("Round Trip Time:         %d" % (round_trip_time))
+#     print("Time in Remote Switch:   %d" % (time_in_switch))
+#     print("Time on Wire:            %d" % (time_on_wire))
+#     print("Estimated One Way Delay: %d" % (one_way_delay))
+#     print("Calculated Offset:       %d" % (offset))
+#     print("Local Egress TS:         %d" % (pkt['local_egress_ts']))
+#     print("Remote Ingress TS:       %d" % (pkt['remote_ingress_ts']))
+#     print("Remote Egress TS:        %d" % (pkt['remote_egress_ts']))
+#     print("Local Ingress TS:        %d" % (pkt['local_ingress_ts']))
+#     print("DEBUG D1:                %d" % (pkt['remote_ingress_ts'] - pkt['local_egress_ts']))
+#     print("DEBUG D2:                %d" % (pkt['local_ingress_ts'] - pkt['remote_egress_ts']))
+#     print('')
+#     calc_ts7_offset(pkt)
 
-    print("Round Trip Time:         %d" % (round_trip_time))
-    print("Time in Remote Switch:   %d" % (time_in_switch))
-    print("Time on Wire:            %d" % (time_on_wire))
-    print("Estimated One Way Delay: %d" % (one_way_delay))
-    print("Calculated Offset:       %d" % (offset))
-    print("Local Egress TS:         %d" % (pkt['local_egress_ts']))
-    print("Remote Ingress TS:       %d" % (pkt['remote_ingress_ts']))
-    print("Remote Egress TS:        %d" % (pkt['remote_egress_ts']))
-    print("Local Ingress TS:        %d" % (pkt['local_ingress_ts']))
-    print("DEBUG D1:                %d" % (pkt['remote_ingress_ts'] - pkt['local_egress_ts']))
-    print("DEBUG D2:                %d" % (pkt['local_ingress_ts'] - pkt['remote_egress_ts']))
-    print('')
-    calc_ts7_offset(pkt)
-
-def calc_ts7_offset(pkt):
-    LOCAL_PORT=0x3c
-    REMOTE_PORT=0x1c
-    local_ts7 = c.ts_1588_timestamp_tx_get(0,LOCAL_PORT).ts
-    remote_ts7 = c.ts_1588_timestamp_tx_get(0,REMOTE_PORT).ts
-    print("Local Egress TS Delta:  %d" % (local_ts7 - pkt['local_egress_ts']))
-    print("Remote Egress TS Delta: %d" % (remote_ts7 - pkt['remote_egress_ts']))
-
-    time_in_switch = remote_ts7 - pkt['remote_ingress_ts']
-    round_trip_time = pkt['local_ingress_ts'] - local_ts7
-    time_on_wire = round_trip_time - time_in_switch
-    one_way_delay = time_on_wire / 2
-    offset = local_ts7 + one_way_delay - pkt['remote_ingress_ts']
-    print("Round Trip Time:         %d" % (round_trip_time))
-    print("Time in Remote Switch:   %d" % (time_in_switch))
-    print("Time on Wire:            %d" % (time_on_wire))
-    print("Estimated One Way Delay: %d" % (one_way_delay))
-    print("Calculated Offset:       %d" % (offset))
-    print("Local Egress TS:         %d" % (local_ts7))
-    print("Remote Ingress TS:       %d" % (pkt['remote_ingress_ts']))
-    print("Remote Egress TS:        %d" % (remote_ts7))
-    print("Local Ingress TS:        %d" % (pkt['local_ingress_ts']))
-    print("DEBUG D1:                %d" % (pkt['remote_ingress_ts'] - local_ts7))
-    print("DEBUG D2:                %d" % (pkt['local_ingress_ts'] - remote_ts7))
-    print('')
+# def calc_ts7_offset(pkt):
+#     LOCAL_PORT=0x3c
+#     REMOTE_PORT=0x1c
+#     local_ts7 = c.ts_1588_timestamp_tx_get(0,LOCAL_PORT).ts
+#     remote_ts7 = c.ts_1588_timestamp_tx_get(0,REMOTE_PORT).ts
+#     print("Local Egress TS Delta:  %d" % (local_ts7 - pkt['local_egress_ts']))
+#     print("Remote Egress TS Delta: %d" % (remote_ts7 - pkt['remote_egress_ts']))
+#
+#     time_in_switch = remote_ts7 - pkt['remote_ingress_ts']
+#     round_trip_time = pkt['local_ingress_ts'] - local_ts7
+#     time_on_wire = round_trip_time - time_in_switch
+#     one_way_delay = time_on_wire / 2
+#     offset = local_ts7 + one_way_delay - pkt['remote_ingress_ts']
+#     print("Round Trip Time:         %d" % (round_trip_time))
+#     print("Time in Remote Switch:   %d" % (time_in_switch))
+#     print("Time on Wire:            %d" % (time_on_wire))
+#     print("Estimated One Way Delay: %d" % (one_way_delay))
+#     print("Calculated Offset:       %d" % (offset))
+#     print("Local Egress TS:         %d" % (local_ts7))
+#     print("Remote Ingress TS:       %d" % (pkt['remote_ingress_ts']))
+#     print("Remote Egress TS:        %d" % (remote_ts7))
+#     print("Local Ingress TS:        %d" % (pkt['local_ingress_ts']))
+#     print("DEBUG D1:                %d" % (pkt['remote_ingress_ts'] - local_ts7))
+#     print("DEBUG D2:                %d" % (pkt['local_ingress_ts'] - remote_ts7))
+#     print('')
 
 c = thrift_connect()
 
