@@ -142,7 +142,7 @@ control SwitchIngress(
         const entries = {
             68 : set_egress(60); // Pktgen -> 24/0
             // 60 : set_egress(60); // 24/0 -> 20/0
-            // 28 : set_egress(28); // 20/0 -> 24/0
+            28 : set_egress(28); // 20/0 -> 24/0
         }
         default_action = drop_packet;
     }
